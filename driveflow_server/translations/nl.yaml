@@ -1,0 +1,4 @@
+configuration:
+  api_token:
+    name: DriveFlow API-token
+    description: Gebruik een willekeurig token van minimaal 32 tekens. Deel het alleen met DriveFlow.

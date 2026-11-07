@@ -33,6 +33,7 @@ from snapshot_index import create_tables as create_snapshot_tables, index_backup
 from smart_odometer import create_tables as create_odometer_tables, store as store_odometer, records as odometer_records
 from smart_fuel import create_tables as create_fuel_receipt_tables, save as save_fuel_receipt, records as fuel_receipt_records
 from road_discovery_store import create_tables as create_discovery_tables, merge as merge_discoveries, status as discovery_status, changes as discovery_changes, CATALOG as DISCOVERY_CATALOG
+from discovery_places import create_tables as create_place_discovery_tables, merge as merge_places, status as place_status, changes as place_changes, CATALOG as PLACE_CATALOG
 
 VERSION = "0.6.3"
 PORT = int(os.environ.get("DRIVEFLOW_PORT", "8098"))
@@ -116,6 +117,7 @@ def init_db():
         create_odometer_tables(db)
         create_fuel_receipt_tables(db)
         create_discovery_tables(db)
+        create_place_discovery_tables(db)
         # Import existing verified snapshots without changing the originals.
         index_existing_latest(db, FILES_DIR, now_iso(), os.environ.get("DRIVEFLOW_TIMEZONE", "Europe/Amsterdam"))
 
@@ -239,6 +241,21 @@ class Api(BaseHTTPRequestHandler):
             self.json(200, {"ok": True, "service": "DriveFlow Server", "version": VERSION})
             return
         if not self.authenticated():
+            return
+        if path == "/v1/discovery/places/status":
+            with connect_db() as db:
+                self.json(200, place_status(db))
+            return
+        if path == "/v1/discovery/places/changes":
+            q = parse_qs(urlparse(self.path).query)
+            try:
+                with connect_db() as db:
+                    result = place_changes(db, int(q.get("since", ["0"])[0]),
+                                           int(q.get("limit", ["1000"])[0]),
+                                           q.get("catalog", [PLACE_CATALOG])[0])
+                self.json(200, result)
+            except (ValueError, OverflowError):
+                self.json(400, {"error": "ongeldige plaats-synchronisatieparameters"})
             return
         if path == "/v1/discovery/status":
             with connect_db() as db:
@@ -385,6 +402,24 @@ class Api(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/v1/discovery/places/merge":
+            if not self.authenticated(): return
+            if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
+                self.json(415, {"error": "alleen JSON is toegestaan"}); return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 1 <= length <= 524288:
+                    self.json(413, {"error": "plaatsbatch te groot of leeg"}); return
+                payload = json.loads(self.rfile.read(length))
+                with LOCK:
+                    with connect_db() as db:
+                        result = merge_places(db, payload, now_iso())
+                self.json(200, result)
+            except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                self.json(422, {"error": str(exc)[:140]})
+            except sqlite3.Error:
+                self.json(500, {"error": "databasefout"})
+            return
         if path == "/v1/discovery/merge":
             if not self.authenticated(): return
             if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":

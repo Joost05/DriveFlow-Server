@@ -1,0 +1,18 @@
+name: DriveFlow Server
+version: "0.6.3"
+slug: driveflow_server
+description: DriveFlow back-ups, ritten synchronisatie en uitgebreide Home Assistant sensoren
+arch:
+  - aarch64
+  - amd64
+startup: services
+boot: auto
+init: false
+backup: cold
+ports:
+  8098/tcp: 8098
+ports_description:
+  8098/tcp: DriveFlow REST API (alleen vertrouwd thuisnetwerk of VPN)
+schema:
+  api_token: password(32,)
+  geoapify_api_key: password?

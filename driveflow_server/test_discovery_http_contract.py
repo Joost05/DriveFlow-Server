@@ -81,6 +81,13 @@ class DiscoveryHttpTest(unittest.TestCase):
         self.assertEqual(self.send("/v1/discovery/places/changes?since=0")[1]["places"],
                          [{"id": "cbs-123", "name": "Apeldoorn"}])
 
+    def test_catalog_download_requires_auth_and_valid_file(self):
+        self.assertEqual(self.send("/v1/discovery/catalog/roads", authorized=False)[0], 401)
+        with patch("server.valid_road_catalog", return_value=False):
+            status, body = self.send("/v1/discovery/catalog/roads")
+        self.assertEqual(status, 503)
+        self.assertEqual(body["error"], "ROAD_CATALOG_NOT_READY")
+
     def test_bad_catalog_rejected_before_any_write(self):
         status, _ = self.send("/v1/discovery/merge", {"catalog": "wrong", "ids": ["A1:1"]})
         self.assertEqual(status, 422)

@@ -33,11 +33,43 @@ from snapshot_index import create_tables as create_snapshot_tables, index_backup
 from smart_odometer import create_tables as create_odometer_tables, store as store_odometer, records as odometer_records
 from smart_fuel import create_tables as create_fuel_receipt_tables, save as save_fuel_receipt, records as fuel_receipt_records
 from road_discovery_store import create_tables as create_discovery_tables, merge as merge_discoveries, status as discovery_status, changes as discovery_changes, CATALOG as DISCOVERY_CATALOG
+from discovery_places import create_tables as create_place_discovery_tables, merge as merge_places, status as place_status, changes as place_changes, CATALOG as PLACE_CATALOG
+from discovery_statistics import create_tables as create_statistics_tables, index_roads, statistics as discovery_statistics
+from province_statistics import create_tables as create_province_tables, prepare as prepare_provinces, statistics as province_statistics
 
-VERSION = "0.6.3"
+VERSION = "0.6.9"
 PORT = int(os.environ.get("DRIVEFLOW_PORT", "8098"))
 DATA_DIR = Path(os.environ.get("DRIVEFLOW_DATA_DIR", "/data"))
 FILES_DIR = DATA_DIR / "backups"
+ROAD_CATALOG_FILE = Path(os.environ.get("DRIVEFLOW_ROADS_FILE", "/share/driveflow/roads_nl.json"))
+ROAD_CATALOG_SIZE = 38566582
+ROAD_CATALOG_GIT_BLOB = "fbee6ec0eb55051e94d0459e36f86c428afe08e0"
+ROAD_CATALOG_LOCK = threading.Lock()
+ROAD_CATALOG_CHECKED = None
+
+def valid_road_catalog(path: Path) -> bool:
+    """Verify the exact HA v0.18 road geometry before serving any bytes."""
+    global ROAD_CATALOG_CHECKED
+    if not path.is_file() or path.is_symlink():
+        return False
+    stat = path.stat()
+    if stat.st_size != ROAD_CATALOG_SIZE:
+        return False
+    with ROAD_CATALOG_LOCK:
+        fingerprint = (str(path), stat.st_mtime_ns, stat.st_size, stat.st_ino)
+        if ROAD_CATALOG_CHECKED == fingerprint:
+            return True
+        digest = hashlib.sha1()
+        digest.update(f"blob {ROAD_CATALOG_SIZE}".encode("ascii") + bytes([0]))
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        if not hmac.compare_digest(digest.hexdigest(), ROAD_CATALOG_GIT_BLOB):
+            return False
+        ROAD_CATALOG_CHECKED = fingerprint
+        return True
+
+
 DB_PATH = DATA_DIR / "driveflow_server.db"
 MAX_COMPRESSED = 128 * 1024 * 1024
 MAX_UNCOMPRESSED = 400 * 1024 * 1024
@@ -116,6 +148,9 @@ def init_db():
         create_odometer_tables(db)
         create_fuel_receipt_tables(db)
         create_discovery_tables(db)
+        create_place_discovery_tables(db)
+        create_statistics_tables(db)
+        create_province_tables(db)
         # Import existing verified snapshots without changing the originals.
         index_existing_latest(db, FILES_DIR, now_iso(), os.environ.get("DRIVEFLOW_TIMEZONE", "Europe/Amsterdam"))
 
@@ -239,6 +274,53 @@ class Api(BaseHTTPRequestHandler):
             self.json(200, {"ok": True, "service": "DriveFlow Server", "version": VERSION})
             return
         if not self.authenticated():
+            return
+        if path == "/v1/discovery/catalog/roads":
+            file = ROAD_CATALOG_FILE
+            if not valid_road_catalog(file):
+                self.json(503, {"error": "ROAD_CATALOG_NOT_READY",
+                                "message": "Plaats het originele HA roads_nl.json in /share/driveflow/roads_nl.json"})
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(ROAD_CATALOG_SIZE))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            try:
+                with file.open("rb") as source:
+                    shutil.copyfileobj(source, self.wfile, 1024 * 1024)
+            except (BrokenPipeError, ConnectionResetError):
+                log.info("Road catalogue download interrupted by client")
+            return
+        if path == "/v1/discovery/statistics":
+            if not valid_road_catalog(ROAD_CATALOG_FILE):
+                self.json(503, {"error": "ROAD_CATALOG_NOT_READY"})
+                return
+            try:
+                with connect_db() as db:
+                    index_roads(db, ROAD_CATALOG_FILE)
+                    result = discovery_statistics(db)
+                    result.update(province_statistics(db))
+                self.json(200, result)
+            except (ValueError, OSError) as exc:
+                log.warning("Road Discovery statistics unavailable: %s", exc.__class__.__name__)
+                self.json(503, {"error": "DISCOVERY_STATISTICS_NOT_READY"})
+            return
+        if path == "/v1/discovery/places/status":
+            with connect_db() as db:
+                self.json(200, place_status(db))
+            return
+        if path == "/v1/discovery/places/changes":
+            q = parse_qs(urlparse(self.path).query)
+            try:
+                with connect_db() as db:
+                    result = place_changes(db, int(q.get("since", ["0"])[0]),
+                                           int(q.get("limit", ["1000"])[0]),
+                                           q.get("catalog", [PLACE_CATALOG])[0])
+                self.json(200, result)
+            except (ValueError, OverflowError):
+                self.json(400, {"error": "ongeldige plaats-synchronisatieparameters"})
             return
         if path == "/v1/discovery/status":
             with connect_db() as db:
@@ -385,6 +467,24 @@ class Api(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/v1/discovery/places/merge":
+            if not self.authenticated(): return
+            if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
+                self.json(415, {"error": "alleen JSON is toegestaan"}); return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 1 <= length <= 524288:
+                    self.json(413, {"error": "plaatsbatch te groot of leeg"}); return
+                payload = json.loads(self.rfile.read(length))
+                with LOCK:
+                    with connect_db() as db:
+                        result = merge_places(db, payload, now_iso())
+                self.json(200, result)
+            except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                self.json(422, {"error": str(exc)[:140]})
+            except sqlite3.Error:
+                self.json(500, {"error": "databasefout"})
+            return
         if path == "/v1/discovery/merge":
             if not self.authenticated(): return
             if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
@@ -544,6 +644,21 @@ class Api(BaseHTTPRequestHandler):
             tmp.unlink(missing_ok=True)
 
 
+def _prepare_provinces_background():
+    if not valid_road_catalog(ROAD_CATALOG_FILE):
+        log.warning("Province indexing postponed: road catalogue unavailable")
+        return
+    try:
+        with LOCK:
+            with connect_db() as db:
+                index_roads(db, ROAD_CATALOG_FILE)
+        with connect_db() as db:
+            info = prepare_provinces(db, ROAD_CATALOG_FILE)
+        log.info("Province indexing ready: %s", info)
+    except Exception as exc:
+        log.warning("Province indexing unavailable (%s): %s", type(exc).__name__, str(exc)[:140])
+
+
 def serve():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     secret = api_token()
@@ -552,6 +667,7 @@ def serve():
     server.api_secret = secret  # type: ignore[attr-defined]
     server.geoapify_key = geoapify_key()  # type: ignore[attr-defined]
     log.info("DriveFlow Server %s ready on port %s, database in /data", VERSION, PORT)
+    threading.Thread(target=_prepare_provinces_background, daemon=True, name="province-index").start()
     server.serve_forever(poll_interval=.5)
 
 

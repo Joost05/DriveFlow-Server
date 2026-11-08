@@ -5,7 +5,7 @@ import unittest
 from road_discovery_store import create_tables as roads_tables, merge as merge_roads
 from discovery_places import create_tables as places_tables, merge as merge_places
 from discovery_statistics import create_tables as stats_tables
-from province_statistics import create_tables, statistics, _contains, _match, REVISION
+from province_statistics import create_tables, statistics, _contains, _match, REVISION, PreparedGeometry
 
 
 class ProvinceStatisticsTests(unittest.TestCase):
@@ -49,6 +49,22 @@ class ProvinceStatisticsTests(unittest.TestCase):
         self.assertEqual(gelderland["percentage"], 100)
         overijssel = next(p for p in loaded["provinces"] if p["name"] == "Overijssel")
         self.assertEqual(overijssel["percentage"], 0)
+
+    def test_prepared_geometry_matches_reference(self):
+        import math
+        import random
+        rng = random.Random(611)
+        outer = [[math.cos(i * math.pi / 180) * 2, math.sin(i * math.pi / 180) * 2]
+                 for i in range(361)]
+        hole = [[math.cos(i * math.pi / 180) * .4, math.sin(i * math.pi / 180) * .4]
+                for i in range(361)]
+        shape = {"type": "Polygon", "coordinates": [outer, hole]}
+        prepared = PreparedGeometry(shape)
+        for _ in range(2500):
+            lon, lat = rng.uniform(-2.2, 2.2), rng.uniform(-2.2, 2.2)
+            self.assertEqual(_contains(lon, lat, shape), prepared.contains(lon, lat))
+        self.assertFalse(prepared.contains(0, 0))
+        self.assertTrue(prepared.contains(1, 0))
 
     def test_polygon_hole_and_province_match(self):
         polygon = {"type": "Polygon", "coordinates": [

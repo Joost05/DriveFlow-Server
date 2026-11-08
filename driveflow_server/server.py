@@ -35,8 +35,9 @@ from smart_fuel import create_tables as create_fuel_receipt_tables, save as save
 from road_discovery_store import create_tables as create_discovery_tables, merge as merge_discoveries, status as discovery_status, changes as discovery_changes, CATALOG as DISCOVERY_CATALOG
 from discovery_places import create_tables as create_place_discovery_tables, merge as merge_places, status as place_status, changes as place_changes, CATALOG as PLACE_CATALOG
 from discovery_statistics import create_tables as create_statistics_tables, index_roads, statistics as discovery_statistics
+from province_statistics import create_tables as create_province_tables, prepare as prepare_provinces, statistics as province_statistics
 
-VERSION = "0.6.8"
+VERSION = "0.6.9"
 PORT = int(os.environ.get("DRIVEFLOW_PORT", "8098"))
 DATA_DIR = Path(os.environ.get("DRIVEFLOW_DATA_DIR", "/data"))
 FILES_DIR = DATA_DIR / "backups"
@@ -149,6 +150,7 @@ def init_db():
         create_discovery_tables(db)
         create_place_discovery_tables(db)
         create_statistics_tables(db)
+        create_province_tables(db)
         # Import existing verified snapshots without changing the originals.
         index_existing_latest(db, FILES_DIR, now_iso(), os.environ.get("DRIVEFLOW_TIMEZONE", "Europe/Amsterdam"))
 
@@ -299,6 +301,7 @@ class Api(BaseHTTPRequestHandler):
                 with connect_db() as db:
                     index_roads(db, ROAD_CATALOG_FILE)
                     result = discovery_statistics(db)
+                    result.update(province_statistics(db))
                 self.json(200, result)
             except (ValueError, OSError) as exc:
                 log.warning("Road Discovery statistics unavailable: %s", exc.__class__.__name__)
@@ -641,6 +644,21 @@ class Api(BaseHTTPRequestHandler):
             tmp.unlink(missing_ok=True)
 
 
+def _prepare_provinces_background():
+    if not valid_road_catalog(ROAD_CATALOG_FILE):
+        log.warning("Province indexing postponed: road catalogue unavailable")
+        return
+    try:
+        with LOCK:
+            with connect_db() as db:
+                index_roads(db, ROAD_CATALOG_FILE)
+        with connect_db() as db:
+            info = prepare_provinces(db, ROAD_CATALOG_FILE)
+        log.info("Province indexing ready: %s", info)
+    except Exception as exc:
+        log.warning("Province indexing unavailable (%s): %s", type(exc).__name__, str(exc)[:140])
+
+
 def serve():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     secret = api_token()
@@ -649,6 +667,7 @@ def serve():
     server.api_secret = secret  # type: ignore[attr-defined]
     server.geoapify_key = geoapify_key()  # type: ignore[attr-defined]
     log.info("DriveFlow Server %s ready on port %s, database in /data", VERSION, PORT)
+    threading.Thread(target=_prepare_provinces_background, daemon=True, name="province-index").start()
     server.serve_forever(poll_interval=.5)
 
 

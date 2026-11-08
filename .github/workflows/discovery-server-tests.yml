@@ -1,0 +1,30 @@
+name: DriveFlow Discovery server verification
+
+on:
+  push:
+    branches: [feature/discovery-place-parity]
+    paths:
+      - "driveflow_server/**"
+      - ".github/workflows/discovery-server-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: discovery-server-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  discovery-storage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check Python syntax
+        run: python -m compileall -q driveflow_server
+      - name: Test both discovery catalogues
+        working-directory: driveflow_server
+        run: python -m unittest -v test_road_discovery_store test_discovery_places test_discovery_sync_recovery

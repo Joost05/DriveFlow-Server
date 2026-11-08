@@ -111,12 +111,18 @@ def _place_id(feature: dict, props: dict) -> str:
     return ""
 
 
-def prepare(db: sqlite3.Connection, road_file: Path) -> dict:
+def prepare(db: sqlite3.Connection, road_file: Path, progress=None) -> dict:
     """Download reference data once and publish mapping atomically on success."""
+    def report(stage, done=0, total=None):
+        if progress is not None:
+            progress(stage, done, total)
+    report('controleren')
     create_tables(db)
     old = db.execute("SELECT value FROM discovery_province_meta WHERE key='revision'").fetchone()
     if old and old[0] == REVISION:
+        report('gereed', 12, 12)
         return {"ready": True, "cached": True}
+    report("provincies_downloaden")
     payload = _page(PROVINCES_URL, "/kadaster/brk-bestuurlijke-gebieden/ogc/v1/collections/provinciegebied/")
     provinces = []
     for feature in payload["features"]:
@@ -128,24 +134,31 @@ def prepare(db: sqlite3.Connection, road_file: Path) -> dict:
             provinces.append((name, geom, bounds))
     if len(provinces) != 12 or len({p[0] for p in provinces}) != 12:
         raise ValueError("PDOK province catalogue is incomplete")
+    report("wegen_lezen")
     road_data = json.loads(road_file.read_text(encoding="utf-8"))
     segments = road_data.get("segments")
     if not isinstance(segments, list) or not segments:
         raise ValueError("road catalogue is missing")
     roads = []
-    for segment in segments:
+    report("wegen_indelen", 0, len(segments))
+    for index, segment in enumerate(segments):
+        if index % 2000 == 0:
+            report("wegen_indelen", index, len(segments))
         a, b = segment.get("a"), segment.get("b")
         if not isinstance(a, list) or not isinstance(b, list) or len(a) < 2 or len(b) < 2:
             continue
         name = _match((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, provinces)
         if name and segment.get("id"):
             roads.append((segment["id"], name))
+    report("wegen_ingedeeld", len(roads), len(segments))
     if not roads:
         raise ValueError("no road segments could be assigned")
     places = []
     next_url = PLACES_URL
     seen = set()
+    report("plaatsen_downloaden")
     while next_url and len(seen) < 30:
+        report("plaatsen_downloaden", len(seen), None)
         if next_url in seen:
             raise ValueError("CBS pagination loop")
         seen.add(next_url)
@@ -164,6 +177,7 @@ def prepare(db: sqlite3.Connection, road_file: Path) -> dict:
         raise ValueError("CBS pagination incomplete")
     if not places:
         raise ValueError("no CBS places could be assigned")
+    report("opslaan", len(roads) + len(places), len(roads) + len(places))
     with db:
         db.execute("DELETE FROM discovery_province_roads")
         db.execute("DELETE FROM discovery_province_places")
@@ -172,6 +186,7 @@ def prepare(db: sqlite3.Connection, road_file: Path) -> dict:
         db.executemany("INSERT OR REPLACE INTO discovery_province_roads(segment_id,province) VALUES(?,?)", roads)
         db.executemany("INSERT OR REPLACE INTO discovery_province_places(place_id,province) VALUES(?,?)", places)
         db.execute("INSERT OR REPLACE INTO discovery_province_meta(key,value) VALUES('revision',?)", (REVISION,))
+    report("gereed", 12, 12)
     return {"ready": True, "roads_assigned": len(roads), "places_assigned": len(places)}
 
 

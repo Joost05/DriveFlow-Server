@@ -37,7 +37,7 @@ from discovery_places import create_tables as create_place_discovery_tables, mer
 from discovery_statistics import create_tables as create_statistics_tables, index_roads, statistics as discovery_statistics
 from province_statistics import create_tables as create_province_tables, prepare as prepare_provinces, statistics as province_statistics
 
-VERSION = "0.6.10"
+VERSION = "0.6.11"
 PORT = int(os.environ.get("DRIVEFLOW_PORT", "8098"))
 DATA_DIR = Path(os.environ.get("DRIVEFLOW_DATA_DIR", "/data"))
 FILES_DIR = DATA_DIR / "backups"
@@ -62,7 +62,7 @@ def _province_progress(stage: str, processed: int = 0, total: int | None = None)
         PROVINCE_STATUS.update(status="gereed" if stage == "gereed" else "bezig",
                                stage=stage, processed=processed, total=total,
                                error=None, updated_at=now_iso())
-    if stage != previous_stage or processed - previous_count >= 20000:
+    if stage != previous_stage or processed - previous_count >= 2000:
         log.info("Province indexing %s: %s/%s", stage, processed,
                  total if total is not None else "?")
 

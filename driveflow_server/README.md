@@ -80,3 +80,15 @@ For now, discovery IDs are append-only to avoid accidentally losing historical
 progress. Catalog changes must be handled by a versioned migration, never by
 silently reusing IDs from a different road geometry file. An offline area cache,
 road geometry and automatic HA-side push will follow in later integration work.
+
+## v0.6.6 — Authenticated HA roads catalogue
+Copy the exact original `roads_nl.json` from Home Assistant's
+`/config/custom_components/road_discovery/roads_nl.json` to the shared
+`/share/driveflow/roads_nl.json` file (make the folder if needed).
+The HAOS app mounts the share read-only. The file is *not* published on GitHub,
+and is not included in the app image. Do not delete or replace the original.
+
+`GET /v1/discovery/catalog/roads` requires the existing bearer API token and
+returns the exact pinned HA v0.18 catalogue only after size and SHA-1 Git-blob
+verification. Missing/wrong files return HTTP 503. The Android app validates
+the file again before import and caches it offline.

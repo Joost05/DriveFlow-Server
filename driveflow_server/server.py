@@ -35,7 +35,7 @@ from smart_fuel import create_tables as create_fuel_receipt_tables, save as save
 from road_discovery_store import create_tables as create_discovery_tables, merge as merge_discoveries, status as discovery_status, changes as discovery_changes, CATALOG as DISCOVERY_CATALOG
 from discovery_places import create_tables as create_place_discovery_tables, merge as merge_places, status as place_status, changes as place_changes, CATALOG as PLACE_CATALOG
 
-VERSION = "0.6.4"
+VERSION = "0.6.5"
 PORT = int(os.environ.get("DRIVEFLOW_PORT", "8098"))
 DATA_DIR = Path(os.environ.get("DRIVEFLOW_DATA_DIR", "/data"))
 FILES_DIR = DATA_DIR / "backups"

@@ -4,6 +4,7 @@ import json
 import sqlite3
 import threading
 import unittest
+import uuid
 from unittest.mock import patch
 
 import server
@@ -34,7 +35,7 @@ class _Request:
 
 class DiscoveryHttpTest(unittest.TestCase):
     def setUp(self):
-        self.db_uri = "file:road-discovery-http-test?mode=memory&cache=shared"
+        self.db_uri = f"file:road-discovery-http-{uuid.uuid4().hex}?mode=memory&cache=shared"
         self.hold = sqlite3.connect(self.db_uri, uri=True, check_same_thread=False)
         roads.create_tables(self.hold)
         places.create_tables(self.hold)

@@ -28,3 +28,8 @@ jobs:
       - name: Test both discovery catalogues
         working-directory: driveflow_server
         run: python -m unittest -v test_road_discovery_store test_discovery_places test_discovery_sync_recovery test_discovery_http_contract
+      - name: Build Home Assistant app image
+        run: docker build -t driveflow-discovery-test ./driveflow_server
+      - name: Verify all runtime modules are included
+        run: |
+          docker run --rm --entrypoint python driveflow-discovery-test -c "import server, discovery_places, road_discovery_store"

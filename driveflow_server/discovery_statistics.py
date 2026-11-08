@@ -9,6 +9,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from road_discovery_store import CATALOG as ROADS
 from discovery_places import CATALOG as PLACES
@@ -69,7 +70,7 @@ def index_roads(db: sqlite3.Connection, path: Path, revision: str = CATALOG_REVI
 def statistics(db: sqlite3.Connection, now: datetime | None = None) -> dict:
     create_tables(db)
     now = now or datetime.now(timezone.utc)
-    today = now.astimezone().date().isoformat()
+    today = now.astimezone(ZoneInfo('Europe/Amsterdam')).date().isoformat()
     row = db.execute("""SELECT COUNT(*),COALESCE(SUM(length_m),0)
         FROM discovery_road_lengths""").fetchone()
     road_total, meters_total = int(row[0]), float(row[1])

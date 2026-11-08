@@ -34,8 +34,9 @@ from smart_odometer import create_tables as create_odometer_tables, store as sto
 from smart_fuel import create_tables as create_fuel_receipt_tables, save as save_fuel_receipt, records as fuel_receipt_records
 from road_discovery_store import create_tables as create_discovery_tables, merge as merge_discoveries, status as discovery_status, changes as discovery_changes, CATALOG as DISCOVERY_CATALOG
 from discovery_places import create_tables as create_place_discovery_tables, merge as merge_places, status as place_status, changes as place_changes, CATALOG as PLACE_CATALOG
+from discovery_statistics import create_tables as create_statistics_tables, index_roads, statistics as discovery_statistics
 
-VERSION = "0.6.6"
+VERSION = "0.6.7"
 PORT = int(os.environ.get("DRIVEFLOW_PORT", "8098"))
 DATA_DIR = Path(os.environ.get("DRIVEFLOW_DATA_DIR", "/data"))
 FILES_DIR = DATA_DIR / "backups"
@@ -147,6 +148,7 @@ def init_db():
         create_fuel_receipt_tables(db)
         create_discovery_tables(db)
         create_place_discovery_tables(db)
+        create_statistics_tables(db)
         # Import existing verified snapshots without changing the originals.
         index_existing_latest(db, FILES_DIR, now_iso(), os.environ.get("DRIVEFLOW_TIMEZONE", "Europe/Amsterdam"))
 
@@ -288,6 +290,19 @@ class Api(BaseHTTPRequestHandler):
                     shutil.copyfileobj(source, self.wfile, 1024 * 1024)
             except (BrokenPipeError, ConnectionResetError):
                 log.info("Road catalogue download interrupted by client")
+            return
+        if path == "/v1/discovery/statistics":
+            if not valid_road_catalog(ROAD_CATALOG_FILE):
+                self.json(503, {"error": "ROAD_CATALOG_NOT_READY"})
+                return
+            try:
+                with connect_db() as db:
+                    index_roads(db, ROAD_CATALOG_FILE)
+                    result = discovery_statistics(db)
+                self.json(200, result)
+            except (ValueError, OSError) as exc:
+                log.warning("Road Discovery statistics unavailable: %s", exc.__class__.__name__)
+                self.json(503, {"error": "DISCOVERY_STATISTICS_NOT_READY"})
             return
         if path == "/v1/discovery/places/status":
             with connect_db() as db:

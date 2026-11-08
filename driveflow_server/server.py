@@ -37,7 +37,7 @@ from discovery_places import create_tables as create_place_discovery_tables, mer
 from discovery_statistics import create_tables as create_statistics_tables, index_roads, statistics as discovery_statistics
 from province_statistics import create_tables as create_province_tables, prepare as prepare_provinces, statistics as province_statistics
 
-VERSION = "0.6.9"
+VERSION = "0.6.10"
 PORT = int(os.environ.get("DRIVEFLOW_PORT", "8098"))
 DATA_DIR = Path(os.environ.get("DRIVEFLOW_DATA_DIR", "/data"))
 FILES_DIR = DATA_DIR / "backups"
@@ -46,6 +46,37 @@ ROAD_CATALOG_SIZE = 38566582
 ROAD_CATALOG_GIT_BLOB = "fbee6ec0eb55051e94d0459e36f86c428afe08e0"
 ROAD_CATALOG_LOCK = threading.Lock()
 ROAD_CATALOG_CHECKED = None
+PROVINCE_STATUS_LOCK = threading.Lock()
+PROVINCE_STATUS = {"status": "wachten", "stage": "niet_gestart", "processed": 0,
+                   "total": None, "error": None, "updated_at": None}
+PROVINCE_WORKER = None
+
+def province_status_snapshot() -> dict:
+    with PROVINCE_STATUS_LOCK:
+        return dict(PROVINCE_STATUS)
+
+def _province_progress(stage: str, processed: int = 0, total: int | None = None):
+    with PROVINCE_STATUS_LOCK:
+        previous_stage = PROVINCE_STATUS["stage"]
+        previous_count = PROVINCE_STATUS["processed"]
+        PROVINCE_STATUS.update(status="gereed" if stage == "gereed" else "bezig",
+                               stage=stage, processed=processed, total=total,
+                               error=None, updated_at=now_iso())
+    if stage != previous_stage or processed - previous_count >= 20000:
+        log.info("Province indexing %s: %s/%s", stage, processed,
+                 total if total is not None else "?")
+
+def start_province_worker() -> bool:
+    global PROVINCE_WORKER
+    with PROVINCE_STATUS_LOCK:
+        if PROVINCE_WORKER is not None and PROVINCE_WORKER.is_alive():
+            return False
+        PROVINCE_STATUS.update(status="bezig", stage="gestart", processed=0,
+                               total=None, error=None, updated_at=now_iso())
+        PROVINCE_WORKER = threading.Thread(target=_prepare_provinces_background,
+                                           daemon=True, name="province-index")
+        PROVINCE_WORKER.start()
+        return True
 
 def valid_road_catalog(path: Path) -> bool:
     """Verify the exact HA v0.18 road geometry before serving any bytes."""
@@ -275,6 +306,9 @@ class Api(BaseHTTPRequestHandler):
             return
         if not self.authenticated():
             return
+        if path == "/v1/discovery/provinces/status":
+            self.json(200, {"ok": True, **province_status_snapshot()})
+            return
         if path == "/v1/discovery/catalog/roads":
             file = ROAD_CATALOG_FILE
             if not valid_road_catalog(file):
@@ -302,6 +336,7 @@ class Api(BaseHTTPRequestHandler):
                     index_roads(db, ROAD_CATALOG_FILE)
                     result = discovery_statistics(db)
                     result.update(province_statistics(db))
+                    result["province_indexing"] = province_status_snapshot()
                 self.json(200, result)
             except (ValueError, OSError) as exc:
                 log.warning("Road Discovery statistics unavailable: %s", exc.__class__.__name__)
@@ -467,6 +502,14 @@ class Api(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/v1/discovery/provinces/retry":
+            if not self.authenticated(): return
+            if self.headers.get("Content-Length", "0") != "0":
+                self.json(413, {"error": "geen request-body toegestaan"}); return
+            started = start_province_worker()
+            self.json(202 if started else 409,
+                      {"ok": started, **province_status_snapshot()})
+            return
         if path == "/v1/discovery/places/merge":
             if not self.authenticated(): return
             if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
@@ -645,18 +688,22 @@ class Api(BaseHTTPRequestHandler):
 
 
 def _prepare_provinces_background():
-    if not valid_road_catalog(ROAD_CATALOG_FILE):
-        log.warning("Province indexing postponed: road catalogue unavailable")
-        return
     try:
+        _province_progress("wegenbestand_controleren")
+        if not valid_road_catalog(ROAD_CATALOG_FILE):
+            raise ValueError("roads_nl.json ontbreekt of checksum wijkt af")
+        _province_progress("wegen_indexeren")
         with LOCK:
             with connect_db() as db:
                 index_roads(db, ROAD_CATALOG_FILE)
         with connect_db() as db:
-            info = prepare_provinces(db, ROAD_CATALOG_FILE)
+            info = prepare_provinces(db, ROAD_CATALOG_FILE, _province_progress)
         log.info("Province indexing ready: %s", info)
     except Exception as exc:
-        log.warning("Province indexing unavailable (%s): %s", type(exc).__name__, str(exc)[:140])
+        reason = f"{type(exc).__name__}: {str(exc)[:140]}"
+        with PROVINCE_STATUS_LOCK:
+            PROVINCE_STATUS.update(status="fout", error=reason, updated_at=now_iso())
+        log.warning("Province indexing unavailable: %s", reason)
 
 
 def serve():
@@ -667,7 +714,7 @@ def serve():
     server.api_secret = secret  # type: ignore[attr-defined]
     server.geoapify_key = geoapify_key()  # type: ignore[attr-defined]
     log.info("DriveFlow Server %s ready on port %s, database in /data", VERSION, PORT)
-    threading.Thread(target=_prepare_provinces_background, daemon=True, name="province-index").start()
+    start_province_worker()
     server.serve_forever(poll_interval=.5)
 
 

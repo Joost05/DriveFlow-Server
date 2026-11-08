@@ -71,8 +71,13 @@ def statistics(db: sqlite3.Connection, now: datetime | None = None) -> dict:
     create_tables(db)
     now = now or datetime.now(timezone.utc)
     local_date = now.astimezone(ZoneInfo('Europe/Amsterdam')).date()
-    start = datetime.combine(local_date, datetime.min.time(), tzinfo=ZoneInfo('Europe/Amsterdam')).astimezone(timezone.utc).isoformat(timespec='seconds')
-    end = datetime.combine(local_date + timedelta(days=1), datetime.min.time(), tzinfo=ZoneInfo('Europe/Amsterdam')).astimezone(timezone.utc).isoformat(timespec='seconds')
+    dutch_tz = ZoneInfo('Europe/Amsterdam')
+    def boundary(day):
+        return datetime.combine(day, datetime.min.time(), tzinfo=dutch_tz).astimezone(timezone.utc).isoformat(timespec='seconds')
+    start = boundary(local_date)
+    end = boundary(local_date + timedelta(days=1))
+    week_start = boundary(local_date - timedelta(days=local_date.weekday()))
+    month_start = boundary(local_date.replace(day=1))
     row = db.execute("""SELECT COUNT(*),COALESCE(SUM(length_m),0)
         FROM discovery_road_lengths""").fetchone()
     road_total, meters_total = int(row[0]), float(row[1])
@@ -85,11 +90,24 @@ def statistics(db: sqlite3.Connection, now: datetime | None = None) -> dict:
         FROM discovery_segments d JOIN discovery_road_lengths l
         ON d.segment_id=l.segment_id WHERE d.catalog=? AND d.discovered_at>=? AND d.discovered_at<?""",
         (ROADS, start, end)).fetchone()
+    road_periods = {}
+    for period, since in (('week', week_start), ('month', month_start)):
+        period_count, period_meters = db.execute("""SELECT COUNT(*),COALESCE(SUM(l.length_m),0)
+            FROM discovery_segments d JOIN discovery_road_lengths l
+            ON d.segment_id=l.segment_id WHERE d.catalog=? AND d.discovered_at>=? AND d.discovered_at<?""",
+            (ROADS, since, end)).fetchone()
+        road_periods['road_segments_' + period] = int(period_count)
+        road_periods['road_km_' + period] = round(float(period_meters) / METERS_PER_KM, 3)
     places = db.execute(
         "SELECT COUNT(*) FROM discovery_places WHERE catalog=?", (PLACES,)
     ).fetchone()[0]
     places_today = db.execute("""SELECT COUNT(*) FROM discovery_places
         WHERE catalog=? AND discovered_at>=? AND discovered_at<?""", (PLACES, start, end)).fetchone()[0]
+    place_periods = {}
+    for period, since in (('week', week_start), ('month', month_start)):
+        place_periods['places_' + period] = int(db.execute("""SELECT COUNT(*)
+            FROM discovery_places WHERE catalog=? AND discovered_at>=? AND discovered_at<?""",
+            (PLACES, since, end)).fetchone()[0])
     recent = db.execute("""SELECT name,discovered_at FROM discovery_places
         WHERE catalog=? ORDER BY seq DESC LIMIT 1""", (PLACES,)).fetchone()
     return {
@@ -104,6 +122,7 @@ def statistics(db: sqlite3.Connection, now: datetime | None = None) -> dict:
         "road_percentage": round(100 * meters / meters_total, 4) if meters_total else None,
         "places_discovered": int(places),
         "places_today": int(places_today),
+        **road_periods, **place_periods,
         "last_place": recent[0] if recent else None,
         "last_place_at": recent[1] if recent else None,
         "source": "driveflow_server",

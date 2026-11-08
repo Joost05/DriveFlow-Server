@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -70,7 +70,9 @@ def index_roads(db: sqlite3.Connection, path: Path, revision: str = CATALOG_REVI
 def statistics(db: sqlite3.Connection, now: datetime | None = None) -> dict:
     create_tables(db)
     now = now or datetime.now(timezone.utc)
-    today = now.astimezone(ZoneInfo('Europe/Amsterdam')).date().isoformat()
+    local_date = now.astimezone(ZoneInfo('Europe/Amsterdam')).date()
+    start = datetime.combine(local_date, datetime.min.time(), tzinfo=ZoneInfo('Europe/Amsterdam')).astimezone(timezone.utc).isoformat(timespec='seconds')
+    end = datetime.combine(local_date + timedelta(days=1), datetime.min.time(), tzinfo=ZoneInfo('Europe/Amsterdam')).astimezone(timezone.utc).isoformat(timespec='seconds')
     row = db.execute("""SELECT COUNT(*),COALESCE(SUM(length_m),0)
         FROM discovery_road_lengths""").fetchone()
     road_total, meters_total = int(row[0]), float(row[1])
@@ -81,13 +83,13 @@ def statistics(db: sqlite3.Connection, now: datetime | None = None) -> dict:
     meters = float(meters)
     road_today, meters_today = db.execute("""SELECT COUNT(*),COALESCE(SUM(l.length_m),0)
         FROM discovery_segments d JOIN discovery_road_lengths l
-        ON d.segment_id=l.segment_id WHERE d.catalog=? AND substr(d.discovered_at,1,10)=?""",
-        (ROADS, today)).fetchone()
+        ON d.segment_id=l.segment_id WHERE d.catalog=? AND d.discovered_at>=? AND d.discovered_at<?""",
+        (ROADS, start, end)).fetchone()
     places = db.execute(
         "SELECT COUNT(*) FROM discovery_places WHERE catalog=?", (PLACES,)
     ).fetchone()[0]
     places_today = db.execute("""SELECT COUNT(*) FROM discovery_places
-        WHERE catalog=? AND substr(discovered_at,1,10)=?""", (PLACES, today)).fetchone()[0]
+        WHERE catalog=? AND discovered_at>=? AND discovered_at<?""", (PLACES, start, end)).fetchone()[0]
     recent = db.execute("""SELECT name,discovered_at FROM discovery_places
         WHERE catalog=? ORDER BY seq DESC LIMIT 1""", (PLACES,)).fetchone()
     return {

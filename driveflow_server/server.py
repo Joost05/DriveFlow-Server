@@ -36,7 +36,7 @@ from road_discovery_store import create_tables as create_discovery_tables, merge
 from discovery_places import create_tables as create_place_discovery_tables, merge as merge_places, status as place_status, changes as place_changes, CATALOG as PLACE_CATALOG
 from discovery_statistics import create_tables as create_statistics_tables, index_roads, statistics as discovery_statistics
 
-VERSION = "0.6.7"
+VERSION = "0.6.8"
 PORT = int(os.environ.get("DRIVEFLOW_PORT", "8098"))
 DATA_DIR = Path(os.environ.get("DRIVEFLOW_DATA_DIR", "/data"))
 FILES_DIR = DATA_DIR / "backups"

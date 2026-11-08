@@ -93,9 +93,55 @@ def _contains(lon: float, lat: float, geometry: dict) -> bool:
     return False
 
 
+class PreparedRing:
+    """Exact ray casting with latitude buckets of candidate polygon edges.
+
+    Building this once prevents scanning all coastline vertices for each road.
+    The crossing test remains identical to _ring_contains.
+    """
+    STEP = 0.02
+
+    def __init__(self, ring):
+        self.buckets = {}
+        if len(ring) < 2:
+            return
+        previous = ring[-1]
+        for point in ring:
+            xi, yi = point[:2]
+            xj, yj = previous[:2]
+            previous = point
+            if yi == yj:
+                continue
+            low = math.floor(min(yi, yj) / self.STEP)
+            high = math.floor(max(yi, yj) / self.STEP)
+            edge = (xi, yi, xj, yj)
+            for bucket in range(low, high + 1):
+                self.buckets.setdefault(bucket, []).append(edge)
+
+    def contains(self, lon, lat):
+        inside = False
+        for xi, yi, xj, yj in self.buckets.get(math.floor(lat / self.STEP), ()):
+            if (yi > lat) != (yj > lat) and lon < (xj - xi) * (lat - yi) / (yj - yi) + xi:
+                inside = not inside
+        return inside
+
+
+class PreparedGeometry:
+    def __init__(self, geometry):
+        self.polygons = [[PreparedRing(ring) for ring in polygon]
+                         for polygon in _rings(geometry)]
+
+    def contains(self, lon, lat):
+        return any(polygon and polygon[0].contains(lon, lat)
+                   and not any(hole.contains(lon, lat) for hole in polygon[1:])
+                   for polygon in self.polygons)
+
+
 def _match(lon: float, lat: float, provinces: list) -> str | None:
     for name, geometry, bounds in provinces:
-        if bounds[0] <= lon <= bounds[2] and bounds[1] <= lat <= bounds[3] and _contains(lon, lat, geometry):
+        if (bounds[0] <= lon <= bounds[2] and bounds[1] <= lat <= bounds[3]
+                and (geometry.contains(lon, lat) if isinstance(geometry, PreparedGeometry)
+                     else _contains(lon, lat, geometry))):
             return name
     return None
 
@@ -131,7 +177,7 @@ def prepare(db: sqlite3.Connection, road_file: Path, progress=None) -> dict:
         geom = feature.get("geometry") or {}
         bounds = _bounds(geom)
         if name and bounds:
-            provinces.append((name, geom, bounds))
+            provinces.append((name, PreparedGeometry(geom), bounds))
     if len(provinces) != 12 or len({p[0] for p in provinces}) != 12:
         raise ValueError("PDOK province catalogue is incomplete")
     report("wegen_lezen")

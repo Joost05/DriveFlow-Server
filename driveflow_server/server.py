@@ -47,7 +47,7 @@ from discovery2_lines import (status as discovery2_lines_status, stage as discov
                               start_build as discovery2_lines_build, tiles as discovery2_lines_tiles,
                               LAYERS as DISCOVERY2_LINE_LAYERS)
 
-VERSION = "0.6.11"
+VERSION = "0.6.12-beta1"
 PORT = int(os.environ.get("DRIVEFLOW_PORT", "8098"))
 DATA_DIR = Path(os.environ.get("DRIVEFLOW_DATA_DIR", "/data"))
 FILES_DIR = DATA_DIR / "backups"

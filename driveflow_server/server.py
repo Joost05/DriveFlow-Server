@@ -43,6 +43,9 @@ from discovery2_clients import record as record_discovery2_client, status as dis
 from discovery2_readiness import evaluate as discovery2_evaluate_readiness
 from discovery2_preflight import evaluate as discovery2_evaluate_preflight
 from discovery2_append_catalog import status as discovery2_append_catalog_status
+from discovery2_lines import (status as discovery2_lines_status, stage as discovery2_lines_stage,
+                              start_build as discovery2_lines_build, tiles as discovery2_lines_tiles,
+                              LAYERS as DISCOVERY2_LINE_LAYERS)
 
 VERSION = "0.6.11"
 PORT = int(os.environ.get("DRIVEFLOW_PORT", "8098"))
@@ -346,6 +349,22 @@ class Api(BaseHTTPRequestHandler):
                                 "ready_for_migration": False,
                                 "ready_for_switch": False})
             return
+        if path == "/v1/discovery2/lines/status":
+            self.json(200, {"ok": True, **discovery2_lines_status(DATA_DIR)})
+            return
+        if path == "/v1/discovery2/lines/viewport":
+            try:
+                args = parse_qs(urlparse(self.path).query)
+                layer = args.get("layer", ["legacy"])[0]
+                bbox = tuple(float(v) for v in args["bbox"][0].split(","))
+                limit = int(args.get("limit", ["150"])[0])
+                self.json(200, {"ok": True, **discovery2_lines_tiles(
+                    DATA_DIR, DB_PATH, layer, bbox, limit)})
+            except (KeyError, ValueError, TypeError):
+                self.json(422, {"error": "INVALID_VIEWPORT_REQUEST"})
+            except (OSError, sqlite3.Error, FileNotFoundError):
+                self.json(503, {"error": "DISCOVERY2_LINES_NOT_READY"})
+            return
         if path == "/v1/discovery2/append/status":
             try:
                 self.json(200, {"ok": True, **discovery2_append_catalog_status(DATA_DIR)})
@@ -585,6 +604,28 @@ class Api(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         path = urlparse(self.path).path
+        if path.startswith("/v1/discovery2/lines/stage/"):
+            layer = path.rsplit("/", 1)[-1]
+            if layer not in DISCOVERY2_LINE_LAYERS:
+                self.close_connection = True
+                self.json(404, {"error": "UNKNOWN_LINE_LAYER"})
+                return
+            if not self.authenticated():
+                self.close_connection = True
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "-1"))
+                result = discovery2_lines_stage(
+                    self.rfile, length, self.headers.get("X-Content-SHA256", ""),
+                    DATA_DIR, layer)
+                self.json(201, {"ok": True, **result})
+            except FileExistsError:
+                self.close_connection = True
+                self.json(409, {"error": "LINE_LAYER_ALREADY_STAGED"})
+            except (OSError, ValueError):
+                self.close_connection = True
+                self.json(422, {"error": "INVALID_LINE_LAYER_UPLOAD"})
+            return
         if path != "/v1/discovery2/catalog/stage":
             self.close_connection = True
             self.json(404, {"error": "route niet gevonden"})
@@ -676,6 +717,18 @@ class Api(BaseHTTPRequestHandler):
             except (OSError, sqlite3.Error) as exc:
                 log.warning("Discovery2 preview operation failed: %s", type(exc).__name__)
                 self.json(503, {"error": "PREVIEW_OPERATION_FAILED"})
+            return
+        if path == "/v1/discovery2/lines/build":
+            if not self.authenticated():
+                self.close_connection = True
+                return
+            if self.headers.get("Content-Length", "0") != "0":
+                self.close_connection = True
+                self.json(413, {"error": "NO_BODY_ALLOWED"})
+                return
+            started = discovery2_lines_build(DATA_DIR)
+            self.json(202 if started else 409,
+                      {"ok": started, **discovery2_lines_status(DATA_DIR)})
             return
         if path == "/v1/discovery2/compare/start":
             if not self.authenticated():

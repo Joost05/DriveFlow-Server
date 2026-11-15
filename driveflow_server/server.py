@@ -36,6 +36,11 @@ from road_discovery_store import create_tables as create_discovery_tables, merge
 from discovery_places import create_tables as create_place_discovery_tables, merge as merge_places, status as place_status, changes as place_changes, CATALOG as PLACE_CATALOG
 from discovery_statistics import create_tables as create_statistics_tables, index_roads, statistics as discovery_statistics
 from province_statistics import create_tables as create_province_tables, prepare as prepare_provinces, statistics as province_statistics
+from discovery2_upload import receive_catalogue as stage_discovery2_catalogue, staged_status as discovery2_staged_status, catalogue_path as discovery2_catalogue_path, sha256_file as discovery2_sha256_file, EXPECTED_SHA256 as DISCOVERY2_SHA256, EXPECTED_BYTES as DISCOVERY2_UPLOAD_BYTES, UploadError as Discovery2UploadError
+from discovery2_analysis import start as start_discovery2_analysis, status as discovery2_analysis_status, read_report as discovery2_read_report
+from discovery2_shadow import candidate_import as create_discovery2_preview, refresh as refresh_discovery2_preview, preview_status as discovery2_preview_status, schedule_refresh as queue_discovery2_preview_refresh, PREVIEW_DB_LOCK as DISCOVERY2_PREVIEW_LOCK, NotReady as Discovery2NotReady
+from discovery2_clients import record as record_discovery2_client, status as discovery2_clients_status
+from discovery2_readiness import evaluate as discovery2_evaluate_readiness
 
 VERSION = "0.6.11"
 PORT = int(os.environ.get("DRIVEFLOW_PORT", "8098"))
@@ -306,6 +311,66 @@ class Api(BaseHTTPRequestHandler):
             return
         if not self.authenticated():
             return
+        if path == "/v1/discovery2/catalog/download":
+            file = discovery2_catalogue_path(DATA_DIR)
+            if (file.is_symlink() or not file.is_file() or
+                    file.stat().st_size != DISCOVERY2_UPLOAD_BYTES):
+                self.json(503, {"error": "DISCOVERY2_NOT_STAGED"})
+                return
+            try:
+                if not hmac.compare_digest(discovery2_sha256_file(file), DISCOVERY2_SHA256):
+                    self.json(503, {"error": "DISCOVERY2_CHECKSUM_ERROR"})
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(DISCOVERY2_UPLOAD_BYTES))
+                self.send_header("X-Content-SHA256", DISCOVERY2_SHA256)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                with file.open("rb") as source:
+                    shutil.copyfileobj(source, self.wfile, 1024 * 1024)
+            except (BrokenPipeError, ConnectionResetError):
+                log.info("Discovery2 staged catalogue download interrupted")
+            except OSError:
+                log.warning("Discovery2 catalogue download failed due to IO error")
+            return
+        if path == "/v1/discovery2/catalog/status":
+            self.json(200, {"ok": True, **discovery2_staged_status(DATA_DIR)})
+            return
+        if path == "/v1/discovery2/readiness":
+            try:
+                self.json(200, discovery2_evaluate_readiness(DATA_DIR, DB_PATH))
+            except (sqlite3.Error, OSError, ValueError):
+                self.json(503, {"error": "DISCOVERY2_READINESS_UNAVAILABLE",
+                                "ready_for_switch": False,
+                                "ready_for_google_play": False})
+            return
+        if path == "/v1/discovery2/clients/status":
+            try:
+                with connect_db() as db:
+                    cursor = db.execute(
+                        "SELECT COALESCE(MAX(seq),0) FROM discovery_segments WHERE catalog=?",
+                        (DISCOVERY_CATALOG,)).fetchone()[0]
+                self.json(200, {"ok": True, "legacy_server_cursor": cursor,
+                                **discovery2_clients_status(DATA_DIR, cursor)})
+            except (sqlite3.Error, OSError):
+                self.json(503, {"error": "CLIENT_STATUS_UNAVAILABLE"})
+            return
+        if path == "/v1/discovery2/preview/status":
+            try:
+                self.json(200, {"ok": True, **discovery2_preview_status(DATA_DIR)})
+            except (Discovery2NotReady, sqlite3.Error, OSError):
+                self.json(503, {"error": "PREVIEW_NOT_READY"})
+            return
+        if path == "/v1/discovery2/compare/status":
+            self.json(200, discovery2_analysis_status(DATA_DIR))
+            return
+        if path == "/v1/discovery2/compare/report":
+            report = discovery2_read_report(DATA_DIR)
+            self.json(200, {"ok": True, **report} if report is not None else
+                      {"ok": False, "error": "REPORT_NOT_READY"})
+            return
         if path == "/v1/discovery/provinces/status":
             self.json(200, {"ok": True, **province_status_snapshot()})
             return
@@ -500,8 +565,115 @@ class Api(BaseHTTPRequestHandler):
             return
         self.json(404, {"error": "route niet gevonden"})
 
+    def do_PUT(self):
+        path = urlparse(self.path).path
+        if path != "/v1/discovery2/catalog/stage":
+            self.close_connection = True
+            self.json(404, {"error": "route niet gevonden"})
+            return
+        if not self.authenticated():
+            self.close_connection = True
+            return
+        if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
+            self.close_connection = True
+            self.json(415, {"error": "alleen application/json is toegestaan"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "-1"))
+        except ValueError:
+            length = -1
+        if length != DISCOVERY2_UPLOAD_BYTES:
+            self.close_connection = True
+            self.json(413, {"error": "onverwachte catalogusgrootte",
+                            "expected_bytes": DISCOVERY2_UPLOAD_BYTES})
+            return
+        try:
+            # Read and hash in chunks; only exact pinned catalogue bytes accepted.
+            result = stage_discovery2_catalogue(
+                self.rfile, length, DATA_DIR, self.headers.get("X-Content-SHA256", ""))
+            self.json(201, {"ok": True, **result})
+        except FileExistsError:
+            self.close_connection = True
+            self.json(409, {"error": "catalogus staat al klaar"})
+        except Discovery2UploadError as exc:
+            self.close_connection = True
+            self.json(422, {"error": str(exc)[:150]})
+        except (OSError, ValueError) as exc:
+            self.close_connection = True
+            log.warning("Discovery2 staging failed: %s", type(exc).__name__)
+            self.json(500, {"error": "catalogusimport mislukt"})
+
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/v1/discovery2/clients/sync-complete":
+            if not self.authenticated():
+                self.close_connection = True
+                return
+            if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
+                self.close_connection = True
+                self.json(415, {"error": "alleen JSON toegestaan"})
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "-1"))
+                if not 1 <= length <= 4096:
+                    self.close_connection = True
+                    self.json(413, {"error": "ongeldige berichtgrootte"})
+                    return
+                payload = json.loads(self.rfile.read(length))
+                device = self.headers.get("X-DriveFlow-Device-Id", "")
+                with connect_db() as db:
+                    cursor = db.execute(
+                        "SELECT COALESCE(MAX(seq),0) FROM discovery_segments WHERE catalog=?",
+                        (DISCOVERY_CATALOG,)).fetchone()[0]
+                result = record_discovery2_client(DATA_DIR, device, payload, cursor)
+                self.json(200, result)
+            except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                self.json(409, {"error": str(exc)[:160]})
+            except (sqlite3.Error, OSError):
+                self.json(503, {"error": "SYNC_ATTESTATION_FAILED"})
+            return
+        if path in ("/v1/discovery2/preview/build", "/v1/discovery2/preview/refresh"):
+            if not self.authenticated():
+                self.close_connection = True
+                return
+            if self.headers.get("Content-Length", "0") != "0":
+                self.close_connection = True
+                self.json(413, {"error": "geen request-body toegestaan"})
+                return
+            # Serialize refresh and preview build; these are administrative,
+            # potentially long-running operations. Never update live discovery tables.
+            try:
+                with DISCOVERY2_PREVIEW_LOCK:
+                    if path.endswith("/build"):
+                        result = create_discovery2_preview(DATA_DIR, DB_PATH)
+                        self.json(201, {"ok": True, **result})
+                        queue_discovery2_preview_refresh(DATA_DIR, DB_PATH)
+                    else:
+                        result = refresh_discovery2_preview(DATA_DIR, DB_PATH)
+                        self.json(200, {"ok": True, **result})
+            except FileExistsError:
+                self.json(409, {"error": "preview bestaat al"})
+            except (Discovery2NotReady, ValueError) as exc:
+                self.json(409, {"error": str(exc)[:160]})
+            except (OSError, sqlite3.Error) as exc:
+                log.warning("Discovery2 preview operation failed: %s", type(exc).__name__)
+                self.json(503, {"error": "PREVIEW_OPERATION_FAILED"})
+            return
+        if path == "/v1/discovery2/compare/start":
+            if not self.authenticated():
+                self.close_connection = True
+                return
+            if self.headers.get("Content-Length", "0") != "0":
+                self.close_connection = True
+                self.json(413, {"error": "geen request-body toegestaan"})
+                return
+            if not valid_road_catalog(ROAD_CATALOG_FILE):
+                self.json(503, {"error": "LEGACY_CATALOG_NOT_READY"})
+                return
+            started, reason = start_discovery2_analysis(DATA_DIR, ROAD_CATALOG_FILE, DB_PATH)
+            self.json(202 if started else 409,
+                      {"ok": started, "reason": reason, **discovery2_analysis_status(DATA_DIR)})
+            return
         if path == "/v1/discovery/provinces/retry":
             if not self.authenticated(): return
             if self.headers.get("Content-Length", "0") != "0":
@@ -541,6 +713,8 @@ class Api(BaseHTTPRequestHandler):
                     with connect_db() as db:
                         result = merge_discoveries(db, payload, now_iso())
                 self.json(200, result)
+                if result.get("added", 0) > 0:
+                    queue_discovery2_preview_refresh(DATA_DIR, DB_PATH)
             except (ValueError, TypeError, json.JSONDecodeError) as exc:
                 self.json(422, {"error": str(exc)[:140]})
             except sqlite3.Error:
@@ -715,6 +889,7 @@ def serve():
     server.geoapify_key = geoapify_key()  # type: ignore[attr-defined]
     log.info("DriveFlow Server %s ready on port %s, database in /data", VERSION, PORT)
     start_province_worker()
+    queue_discovery2_preview_refresh(DATA_DIR, DB_PATH)
     server.serve_forever(poll_interval=.5)
 
 

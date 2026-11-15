@@ -129,3 +129,46 @@ disk space checks, safe deployment/rollback, server-side legacy comparison,
 mapping of synchronized **and pending offline** discoveries, verified activation
 and Android opt-in download. No database migration should be enabled until
 these pass.
+
+
+## Experimental background comparison on the server (not yet released)
+
+The feature branch now has these additional **authenticated** endpoints:
+
+- `POST /v1/discovery2/compare/start` with an empty body, replies HTTP 202
+  when the worker starts; HTTP 409 when a job is running or results exist;
+  HTTP 503 when the verified legacy catalogue is unavailable.
+- `GET /v1/discovery2/compare/status` returns worker stage, processed count,
+  any error and report availability.
+- `GET /v1/discovery2/compare/report` returns a **review-only** comparison
+  summary, including the cursor of the legacy discoveries at snapshot time.
+
+After the revised server has been tested on an isolated HAOS copy and
+deployed, start the comparison from a LAN PowerShell session:
+
+```powershell
+curl.exe --fail-with-body -X POST "$server/v1/discovery2/compare/start" -H "Authorization: Bearer $token" -H "Content-Length: 0"
+curl.exe --fail-with-body "$server/v1/discovery2/compare/status" -H "Authorization: Bearer $token"
+curl.exe --fail-with-body "$server/v1/discovery2/compare/report" -H "Authorization: Bearer $token"
+```
+
+The server verifies the legacy `roads_nl.json` file and the staged
+SHA-256. It reads its own `discovery_segments` data via a SQLite
+**read-only** connection. The full new catalogue is streamed by `ijson`;
+the old catalogue gets an on-disk spatial index inside the add-on's
+private data directory. Requires at least **1 GiB** of free storage for
+temporary indexing, mapping and safety margin. The 1.39-million-segment
+scan runs on a daemon thread so standard HTTP requests can continue.
+
+Files created only inside `/data/discovery2/`:
+
+- `comparison_report.json` — counts and progress-cursor snapshot
+- `comparison_candidates.csv` — per-segment *candidate* geometric mapping
+
+Mapping may be unreliable near ramps, intersections or parallel lanes,
+and matches are deliberately conservative. These are NOT authorized
+migration records. Discoveries that remain in Android's local pending
+outbox after the server snapshot are not included; there is no automatic
+switch, green-state transfer, or download to Android in this phase.
+Do not remove the old catalogue, alter `discovery_segments` rows or
+install from this development branch until integration and HAOS tests pass.

@@ -16,6 +16,7 @@ import csv
 import json
 import logging
 import os
+import math
 import threading
 import sqlite3
 import tempfile
@@ -120,7 +121,7 @@ def candidate_import(data_dir: Path, db_path: Path):
                     if not new_id or not old_id:
                         raise ValueError("Ongeldige segment-ID in kandidaatkaart")
                     distance = float(row["offset_m"])
-                    if not (0 <= distance <= 10):
+                    if not (math.isfinite(distance) and 0 <= distance <= 10):
                         raise ValueError("Ongeldige afstand in kandidaatkaart")
                     db.execute(
                         "INSERT INTO discovery2_candidate_map(new_id,old_id,offset_m) VALUES(?,?,?)",

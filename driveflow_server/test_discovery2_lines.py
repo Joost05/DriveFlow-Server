@@ -1,5 +1,8 @@
 """Safety tests for DriveFlow connected line server map preview."""
 import hashlib
+import gzip
+import sys
+import types
 import io
 import json
 import sqlite3
@@ -71,6 +74,37 @@ class ConnectedLineTests(unittest.TestCase):
                 lines.stage(io.BytesIO(payload), len(payload), checksum, self.root, "legacy")
             with self.assertRaises(ValueError):
                 lines.stage(io.BytesIO(payload), len(payload), "0" * 64, self.root, "legacy")
+        self.assertEqual(self.before, self.live.read_bytes())
+
+    def test_build_connected_index_checks_cardinality_and_preserves_live(self):
+        features = {
+            "legacy": {"type": "Feature", "properties": {
+                "road": "A1", "source_segment_ids": ["A1-one", "A1-two"]},
+                "geometry": {"type": "LineString",
+                             "coordinates": [[5.0, 52.0], [5.001, 52.0], [5.002, 52.0]]}},
+            "osm": {"type": "Feature", "properties": {
+                "road": "A1", "source_segment_ids": ["osm:first"]},
+                "geometry": {"type": "LineString",
+                             "coordinates": [[5.0, 52.0], [5.001, 52.0]]}}
+        }
+        for layer in ("legacy", "osm"):
+            source = lines.source_path(self.root, layer)
+            with gzip.open(source, "wt") as out:
+                json.dump({"features": [features[layer]]}, out)
+        self.index.unlink()
+        def read_features(handle, *_args, **_kwargs):
+            return iter(json.load(handle)["features"])
+        stub = types.SimpleNamespace(items=read_features)
+        tiny = {"legacy": ("roads_nl_legacy_connected.geojson.gz", 0, "ignored", 1, 2),
+                "osm": ("roads_nl_osm_connected.geojson.gz", 0, "ignored", 1, 1)}
+        with patch.dict(lines.LAYERS, tiny):
+            with patch.object(lines, "_verified", return_value=True):
+                with patch.dict(sys.modules, {"ijson": stub}):
+                    lines._build(self.root)
+        self.assertEqual(lines.status(self.root)["state"], "complete")
+        self.assertEqual(lines.tiles(
+            self.root, self.live, "legacy", (4.99, 51.99, 5.01, 52.01)
+        )["lines"][0]["parts"][0]["state"], "discovered")
         self.assertEqual(self.before, self.live.read_bytes())
 
     def test_staging_truncated_fails_without_file(self):

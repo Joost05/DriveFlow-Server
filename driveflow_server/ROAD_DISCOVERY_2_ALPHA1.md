@@ -359,3 +359,49 @@ to live in the original `discovery_segments` table.
 
 This stage does **not** constitute a releasable `v0.6.12-beta1` and does not
 modify the installed HAOS `v0.6.11` application.
+
+
+## Connected road-line server preview — staged files and map endpoints
+
+This developer-only implementation uses the actual connected line files
+generated from the two uploaded catalogues; it **does not replace** the
+original JSON catalogues or edit the active discovery database.
+
+### Files staged separately over LAN
+
+- `legacy`: `roads_nl_legacy_connected.geojson.gz`,
+  **4,419,325 bytes**, SHA256
+  `35d4ca806e009a69ef542aa71c327c695e568a305f3d60b21c7587f2ae11a5b1`
+- `osm`: `roads_nl_osm_connected.geojson.gz`,
+  **24,980,704 bytes**, SHA256
+  `5001a12e375037003038fba43010d1c8a9ff69e3d22fb791568aeddc33ca26f9`
+
+The following routes are Bearer-authenticated and exist only in this
+unmerged development branch:
+
+- `PUT /v1/discovery2/lines/stage/legacy` and `.../osm`:
+  send raw gzip bytes with exact `Content-Length` and `X-Content-SHA256`.
+  Uploaded files are checksum-pinned and never overwrite existing files.
+- `POST /v1/discovery2/lines/build` (empty body):
+  asynchronously creates a disposable SQLite RTree line index in
+  `/data/discovery2/connected_lines.sqlite`; publishing is atomic.
+  Both exact source SHA256 hashes and all expected line/segment counts
+  are checked. This operation does **not** run on server startup.
+- `GET /v1/discovery2/lines/status`: index/staging progress; no activation.
+- `GET /v1/discovery2/lines/viewport?layer=legacy&bbox=5.9,52.1,6.0,52.2&limit=150`:
+  geographic viewport query (max 0.2° per axis, max 250 joined lines per call).
+  The response returns `lines[].parts[]`, preserving one original segment
+  ID and coordinate pair per part. This allows the Android renderer to draw
+  one connected geometry but change color **within** it.
+
+The `legacy` viewport uses the active `discovery_segments` database opened
+with SQLite read-only mode, and marks individual original segments
+`discovered` or `undiscovered`. For `osm`, the endpoint intentionally
+returns `unverified` rather than auto-transferring discovery state from
+geometrical candidates. OSM blue/green status must only be finalized when
+explicitly reviewed mappings and genuine OSM discoveries are implemented.
+
+This preview is not production-ready: no Play version has been built, no
+genuine 29 MB upload has been performed on the Odroid, and the large
+RTree build has not been benchmarked on HAOS aarch64. Keep the installed
+v0.6.11 service untouched.

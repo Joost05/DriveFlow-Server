@@ -43,10 +43,10 @@ class InPlaceUpgradeTests(unittest.TestCase):
             db_path = root / "driveflow_server.db"
             legacy_road = root / "roads_nl.json"
             legacy_road.write_bytes(b"original immutable road catalogue marker")
-            with patch.object(server, "DATA_DIR", root), \\
-                 patch.object(server, "FILES_DIR", root / "backups"), \\
-                 patch.object(server, "DB_PATH", db_path), \\
-                 patch.dict(os.environ, {"DRIVEFLOW_TOKEN": "", "GEOAPIFY_API_KEY": ""}):
+            with (patch.object(server, "DATA_DIR", root),
+                  patch.object(server, "FILES_DIR", root / "backups"),
+                  patch.object(server, "DB_PATH", db_path),
+                  patch.dict(os.environ, {"DRIVEFLOW_TOKEN": "", "GEOAPIFY_API_KEY": ""})):
                 server.init_db()
                 with sqlite3.connect(db_path) as db:
                     db.execute(

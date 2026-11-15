@@ -25,7 +25,7 @@ class ReadinessTest(unittest.TestCase):
             root = Path(folder)
             with patch.object(readiness, "staged_status", return_value={
                      "state": "staged", "revision": "road-discovery-2-osm-explicit-v1"
-                 }), patch.object(readiness, "read_report", return_value={
+                 }), patch.object(readiness, "sha256_file", return_value=readiness.EXPECTED_SHA256), patch.object(readiness, "read_report", return_value={
                      "status": "review_only",
                      "counts": {"new_segments": 1_393_159}
                  }), patch.object(readiness, "preview_status", return_value={

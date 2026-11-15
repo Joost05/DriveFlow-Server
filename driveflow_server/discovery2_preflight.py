@@ -23,7 +23,7 @@ CHUNK = 1024 * 1024
 
 def _git_blob_sha1(path: Path) -> str:
     digest = hashlib.sha1()
-    digest.update(f"blob {path.stat().st_size}\\0".encode("ascii"))
+    digest.update(f"blob {path.stat().st_size}".encode("ascii") + bytes([0]))
     with path.open("rb") as handle:
         for piece in iter(lambda: handle.read(CHUNK), b""):
             digest.update(piece)

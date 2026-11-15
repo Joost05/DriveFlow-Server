@@ -425,3 +425,42 @@ If `truncated: true`, repeat with `after=next_after` until
 `truncated: false`. Keep layer and bbox fixed across pages and restart
 from `after=0` after moving/zooming the viewport. The query remains
 preview-only and does not alter the user's discovery state.
+
+
+## In-place Home Assistant upgrade plan: v0.6.11 -> v0.6.12-beta1
+
+The development branch now declares `0.6.12-beta1` consistently in
+`config.yaml`, `Dockerfile`, and the runtime `VERSION`. The add-on identity
+`slug: driveflow_server`, TCP port `8098`, `/data` storage, `share:ro`,
+`backup: cold`, and configuration options `api_token` and
+`geoapify_api_key` are **unchanged**. The server continues reading the
+existing `/data/options.json`; no new token, API credential, or new add-on
+installation is needed.
+
+An explicit upgrade regression test exercises repeat `init_db()` against
+an existing SQLite database, verifying the existing legacy discovery ID
+and timestamp, unrelated user data, unchanged old catalogue file,
+unchanged options/API token and absence of an automatic new line index.
+The old `/v1/discovery/*` endpoints remain enabled and the optional v2
+line importer has no startup auto-activation.
+
+Before making this beta visible to a live HAOS installation:
+1. Verify that the existing HA backup is a **cold add-on backup** and includes
+   add-on `/data`, `options.json`, and the actual legacy SQLite database.
+   Separately retain `/share/driveflow/roads_nl.json`, because the
+   `share:ro` mount is outside the add-on's private backup scope.
+2. Confirm the add-on updates **in place** with the existing slug. Keep
+   old routes, existing client token and Cloudflare endpoint.
+3. Install v0.6.12-beta1 without activating the preview; verify
+   `/v1/health`, `/v1/discovery/status`, existing sync and backups.
+4. Upload the already checksum-pinned connected line gzip files over the
+   trusted LAN, and explicitly build only the independent index.
+5. Validate original legacy discovered counts and timestamps before/after,
+   preview viewport pagination, RAM/disk performance and Android rendering.
+6. On any failure, restore the **full compatible add-on backup** and verify
+   the independent `/share` catalogue. Do not assume image rollback alone
+   rolls back the database.
+
+**Current state:** draft PR only; no merge to main, no installed update,
+and no actual HAOS backup has been inspected. The v0.6.12-beta1 label on
+this branch is a release candidate designation, not proof of live safety.

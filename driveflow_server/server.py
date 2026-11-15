@@ -42,6 +42,7 @@ from discovery2_shadow import candidate_import as create_discovery2_preview, ref
 from discovery2_clients import record as record_discovery2_client, status as discovery2_clients_status
 from discovery2_readiness import evaluate as discovery2_evaluate_readiness
 from discovery2_preflight import evaluate as discovery2_evaluate_preflight
+from discovery2_append_catalog import status as discovery2_append_catalog_status
 
 VERSION = "0.6.11"
 PORT = int(os.environ.get("DRIVEFLOW_PORT", "8098"))
@@ -344,6 +345,13 @@ class Api(BaseHTTPRequestHandler):
                 self.json(503, {"error": "DISCOVERY2_PREFLIGHT_UNAVAILABLE",
                                 "ready_for_migration": False,
                                 "ready_for_switch": False})
+            return
+        if path == "/v1/discovery2/append/status":
+            try:
+                self.json(200, {"ok": True, **discovery2_append_catalog_status(DATA_DIR)})
+            except (OSError, sqlite3.Error, ValueError):
+                self.json(503, {"error": "DISCOVERY2_APPEND_STATUS_UNAVAILABLE",
+                                "activated": False, "ready_for_switch": False})
             return
         if path == "/v1/discovery2/catalog/status":
             self.json(200, {"ok": True, **discovery2_staged_status(DATA_DIR)})

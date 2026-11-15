@@ -86,5 +86,25 @@ class ShadowMigrationTest(unittest.TestCase):
             preview.candidate_import(self.root, self.main_db)
 
 
+    def test_background_refresh_includes_newly_synced_legacy_events(self):
+        preview.candidate_import(self.root, self.main_db)
+        self.add("legacy-a")
+        self.assertTrue(preview.schedule_refresh(self.root, self.main_db))
+        with preview._SCHEDULE_LOCK:
+            worker = preview._REFRESH_THREAD
+        if worker:
+            worker.join(timeout=5)
+        self.assertEqual(preview.preview_status(self.root)["candidate_discovered_segments"], 2)
+        self.add("unrelated")
+        self.assertTrue(preview.schedule_refresh(self.root, self.main_db))
+        with preview._SCHEDULE_LOCK:
+            worker = preview._REFRESH_THREAD
+        if worker:
+            worker.join(timeout=5)
+        self.assertEqual(preview.preview_status(self.root)["legacy_cursor_processed"], 2)
+        self.assertFalse(preview.preview_status(self.root)["ready_for_switch"])
+
+
+
 if __name__ == "__main__":
     unittest.main()

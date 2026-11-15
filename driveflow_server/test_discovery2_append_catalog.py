@@ -34,10 +34,13 @@ class AppendCatalogueTests(unittest.TestCase):
                   "2026-11-15T12:00:00+00:00")
             db.commit()
         self.before = self.live.read_bytes()
+        self.reader = patch.object(store, "stream_segments",
+                                   side_effect=lambda p: iter(json.loads(p.read_text())["segments"]))
+        self.reader.start()
+        self.addCleanup(self.reader.stop)
 
     def test_independent_namespace_same_id_both_survive_and_live_db_untouched(self):
-        with patch.object(store, "stream_segments", side_effect=store.stream_segments):
-            result = store.build(self.root, self.legacy, self.osm, check_pinned=False)
+        result = store.build(self.root, self.legacy, self.osm, check_pinned=False)
         self.assertEqual(result["old_segments_deleted"], 0)
         self.assertEqual(result["counts_by_namespace"], {"legacy": 2, "osm": 2})
         self.assertFalse(result["physical_road_deduplication_verified"])

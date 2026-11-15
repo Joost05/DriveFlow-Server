@@ -217,3 +217,19 @@ empty. The server cannot attest that without an explicit Android handshake.
   In particular, confirm available RAM and free disk on Odroid M1S.
 - Publish a tested server release and Android update **after** these gates;
   nothing here is deployed to the running server automatically.
+
+
+### Automatically including discoveries synchronized after preview creation
+
+After `/preview/build`, the server automatically schedules the first shadow
+refresh. Every successful existing `POST /v1/discovery/merge` that adds
+legacy segment IDs schedules another coalesced background refresh. A service
+restart also queues a replay when `shadow_preview.sqlite` is present.
+The job reads new events in ordered batches of 5,000 and saves its cursor in
+the separate preview database. Retries are idempotent.
+
+**This does not make a phone's unsent discoveries magically visible.** They
+must first be delivered by the existing Android outbox. The server cannot
+mark v2 as fully ready until the Android client provides a trustworthy
+outbox-drained acknowledgement and the route candidates are reviewed.
+The server continues to report `ready_for_switch: false`.

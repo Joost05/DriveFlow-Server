@@ -15,6 +15,7 @@ from pathlib import Path
 
 from discovery2_shadow import SCHEMA_VERSION, _meta
 from discovery2_upload import REVISION
+from road_discovery_store import CATALOG as LEGACY_CATALOG
 
 REVIEW_SCHEMA = "discovery2-reviewed-pairs-v1"
 
@@ -117,6 +118,7 @@ def build_reviewed_preview(data_dir: Path, decisions_path: Path) -> dict:
                     "review_decisions_sha256": file_sha256(decisions_path),
                     "shadow_cursor_snapshot": _meta(source, "last_legacy_seq") or "0",
                     "approved_pairs": str(len(pairs)),
+                    "last_legacy_seq": "0",
                 }
                 target.executemany("INSERT INTO review_metadata VALUES (?,?)", metadata.items())
         # Never replace even when multiple builders race.
@@ -135,3 +137,67 @@ def build_reviewed_preview(data_dir: Path, decisions_path: Path) -> dict:
         }
     finally:
         temp.unlink(missing_ok=True)
+
+def refresh_reviewed_preview(data_dir: Path, server_db_path: Path, batch: int = 5000) -> dict:
+    """Idempotent replay of server-synced legacy events into approved pairs only.
+
+    The live discovery database is opened read-only; a committed cursor in the
+    separate reviewed preview makes retries and offline catch-up safe. The
+    client outbox is NOT considered empty or verified by this operation.
+    """
+    if not 1 <= batch <= 5000:
+        raise ValueError("Invalid replay batch size")
+    path = data_dir / "discovery2" / "reviewed_preview.sqlite"
+    if not path.is_file() or path.is_symlink():
+        raise FileNotFoundError("Reviewed preview is not available")
+    if server_db_path.is_symlink() or not server_db_path.is_file():
+        raise ValueError("Legacy server database unavailable")
+    source_uri = server_db_path.resolve().as_uri() + "?mode=ro"
+    with sqlite3.connect(source_uri, uri=True, timeout=15) as source, \
+         sqlite3.connect(path, timeout=15) as target:
+        source.execute("PRAGMA query_only=ON")
+        target.execute("PRAGMA busy_timeout=15000")
+        metadata = dict(target.execute("SELECT key,value FROM review_metadata"))
+        if metadata.get("catalog") != REVISION:
+            raise ValueError("Reviewed catalogue mismatch")
+        if "last_legacy_seq" not in metadata:
+            raise ValueError("Reviewed preview lacks replay cursor")
+        last = int(metadata["last_legacy_seq"])
+        if last < 0:
+            raise ValueError("Invalid replay cursor")
+        # Read a stable batch; a subsequent merge will schedule another pass.
+        rows = source.execute(
+            "SELECT seq,segment_id,discovered_at,source FROM discovery_segments "
+            "WHERE catalog=? AND seq>? ORDER BY seq LIMIT ?",
+            (LEGACY_CATALOG, last, batch)
+        ).fetchall()
+        with target:
+            for seq, old_id, discovered_at, origin in rows:
+                target.execute(
+                    "INSERT OR IGNORE INTO reviewed_progress "
+                    "(new_id,old_id,discovered_at,source) "
+                    "SELECT new_id, ?, ?, ? FROM reviewed_pairs WHERE old_id=?",
+                    (old_id, discovered_at, origin, old_id)
+                )
+            if rows:
+                target.execute(
+                    "UPDATE review_metadata SET value=? WHERE key='last_legacy_seq'",
+                    (str(rows[-1][0]),)
+                )
+        cursor = rows[-1][0] if rows else last
+        latest = source.execute(
+            "SELECT COALESCE(MAX(seq),0) FROM discovery_segments WHERE catalog=?",
+            (LEGACY_CATALOG,)
+        ).fetchone()[0]
+        count = target.execute("SELECT COUNT(*) FROM reviewed_progress").fetchone()[0]
+        return {
+            "status": "reviewed_preview_only",
+            "processed_legacy_events": len(rows),
+            "legacy_cursor_processed": cursor,
+            "current_server_cursor": latest,
+            "caught_up_with_server": cursor >= latest,
+            "approved_discovered_segments": count,
+            "pending_android_outbox_verified_empty": False,
+            "activated": False,
+            "ready_for_switch": False,
+        }

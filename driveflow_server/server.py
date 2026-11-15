@@ -36,6 +36,7 @@ from road_discovery_store import create_tables as create_discovery_tables, merge
 from discovery_places import create_tables as create_place_discovery_tables, merge as merge_places, status as place_status, changes as place_changes, CATALOG as PLACE_CATALOG
 from discovery_statistics import create_tables as create_statistics_tables, index_roads, statistics as discovery_statistics
 from province_statistics import create_tables as create_province_tables, prepare as prepare_provinces, statistics as province_statistics
+from discovery2_upload import receive_catalogue as stage_discovery2_catalogue, staged_status as discovery2_staged_status, EXPECTED_BYTES as DISCOVERY2_UPLOAD_BYTES, UploadError as Discovery2UploadError
 
 VERSION = "0.6.11"
 PORT = int(os.environ.get("DRIVEFLOW_PORT", "8098"))
@@ -306,6 +307,9 @@ class Api(BaseHTTPRequestHandler):
             return
         if not self.authenticated():
             return
+        if path == "/v1/discovery2/catalog/status":
+            self.json(200, {"ok": True, **discovery2_staged_status(DATA_DIR)})
+            return
         if path == "/v1/discovery/provinces/status":
             self.json(200, {"ok": True, **province_status_snapshot()})
             return
@@ -499,6 +503,44 @@ class Api(BaseHTTPRequestHandler):
                 shutil.copyfileobj(file, self.wfile, 1024 * 1024)
             return
         self.json(404, {"error": "route niet gevonden"})
+
+    def do_PUT(self):
+        path = urlparse(self.path).path
+        if path != "/v1/discovery2/catalog/stage":
+            self.close_connection = True
+            self.json(404, {"error": "route niet gevonden"})
+            return
+        if not self.authenticated():
+            self.close_connection = True
+            return
+        if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
+            self.close_connection = True
+            self.json(415, {"error": "alleen application/json is toegestaan"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "-1"))
+        except ValueError:
+            length = -1
+        if length != DISCOVERY2_UPLOAD_BYTES:
+            self.close_connection = True
+            self.json(413, {"error": "onverwachte catalogusgrootte",
+                            "expected_bytes": DISCOVERY2_UPLOAD_BYTES})
+            return
+        try:
+            # Read and hash in chunks; only exact pinned catalogue bytes accepted.
+            result = stage_discovery2_catalogue(
+                self.rfile, length, DATA_DIR, self.headers.get("X-Content-SHA256", ""))
+            self.json(201, {"ok": True, **result})
+        except FileExistsError:
+            self.close_connection = True
+            self.json(409, {"error": "catalogus staat al klaar"})
+        except Discovery2UploadError as exc:
+            self.close_connection = True
+            self.json(422, {"error": str(exc)[:150]})
+        except (OSError, ValueError) as exc:
+            self.close_connection = True
+            log.warning("Discovery2 staging failed: %s", type(exc).__name__)
+            self.json(500, {"error": "catalogusimport mislukt"})
 
     def do_POST(self):
         path = urlparse(self.path).path

@@ -172,3 +172,48 @@ outbox after the server snapshot are not included; there is no automatic
 switch, green-state transfer, or download to Android in this phase.
 Do not remove the old catalogue, alter `discovery_segments` rows or
 install from this development branch until integration and HAOS tests pass.
+
+
+## Discovery2 migration shadow preview (development branch, not released)
+
+This implements a **non-destructive**, repeatable *refresh* of an isolated
+preview; it is not an activated v2 discovery table.
+
+After successful upload and completed comparison, the server offers:
+
+- `POST /v1/discovery2/preview/build`: one-time import of comparison
+  candidates to `/data/discovery2/shadow_preview.sqlite`; rejects a
+  duplicate build without overwriting it.
+- `POST /v1/discovery2/preview/refresh`: replay up to 5,000 new,
+  server-synchronized legacy discovery records into shadow preview and
+  persist the processed legacy cursor. This is safe to repeat; call it
+  until `caught_up_with_server` becomes true.
+- `GET /v1/discovery2/preview/status`: candidate/preview counts,
+  processed cursor and explicit `ready_for_switch: false`.
+
+All routes use the existing Bearer token and POST routes expect an empty body.
+The source legacy SQLite DB is opened **read-only**, with a separate
+`shadow_preview.sqlite` for computed candidate state. Every candidate is
+marked **needs_review**; none is treated as approved green. Ambiguous
+parallel roads are excluded. The original `discovery_segments`, its cursor,
+legacy geometry, and Android cache/outbox are untouched.
+
+Offline handling: a discovery made on Android while offline continues to
+sit in the existing Android outbox; when it later reaches the ordinary
+`POST /v1/discovery/merge` endpoint, calling
+`/v1/discovery2/preview/refresh` will include it automatically. This is
+only an eventual-replay mechanism, **not** proof all Android outboxes are
+empty. The server cannot attest that without an explicit Android handshake.
+
+### Remaining release blockers
+
+- Verify candidate accuracy on a sample of parallel carriageways,
+  junctions, bridges, and roads whose segmentation differs.
+- Build an **explicit** validated approval/mapping process; the current
+  `needs_review` preview must never be used as approved green progress.
+- Build offline-outbox reconciliation and a client opt-in/rollback handshake
+  for Android and Android Auto before v2 activation.
+- Exercise Python tests and integration tests in an isolated HAOS setup.
+  In particular, confirm available RAM and free disk on Odroid M1S.
+- Publish a tested server release and Android update **after** these gates;
+  nothing here is deployed to the running server automatically.

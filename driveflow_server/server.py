@@ -36,7 +36,7 @@ from road_discovery_store import create_tables as create_discovery_tables, merge
 from discovery_places import create_tables as create_place_discovery_tables, merge as merge_places, status as place_status, changes as place_changes, CATALOG as PLACE_CATALOG
 from discovery_statistics import create_tables as create_statistics_tables, index_roads, statistics as discovery_statistics
 from province_statistics import create_tables as create_province_tables, prepare as prepare_provinces, statistics as province_statistics
-from discovery2_upload import receive_catalogue as stage_discovery2_catalogue, staged_status as discovery2_staged_status, EXPECTED_BYTES as DISCOVERY2_UPLOAD_BYTES, UploadError as Discovery2UploadError
+from discovery2_upload import receive_catalogue as stage_discovery2_catalogue, staged_status as discovery2_staged_status, catalogue_path as discovery2_catalogue_path, sha256_file as discovery2_sha256_file, EXPECTED_SHA256 as DISCOVERY2_SHA256, EXPECTED_BYTES as DISCOVERY2_UPLOAD_BYTES, UploadError as Discovery2UploadError
 from discovery2_analysis import start as start_discovery2_analysis, status as discovery2_analysis_status, read_report as discovery2_read_report
 from discovery2_shadow import candidate_import as create_discovery2_preview, refresh as refresh_discovery2_preview, preview_status as discovery2_preview_status, schedule_refresh as queue_discovery2_preview_refresh, PREVIEW_DB_LOCK as DISCOVERY2_PREVIEW_LOCK, NotReady as Discovery2NotReady
 from discovery2_clients import record as record_discovery2_client, status as discovery2_clients_status
@@ -309,6 +309,30 @@ class Api(BaseHTTPRequestHandler):
             self.json(200, {"ok": True, "service": "DriveFlow Server", "version": VERSION})
             return
         if not self.authenticated():
+            return
+        if path == "/v1/discovery2/catalog/download":
+            file = discovery2_catalogue_path(DATA_DIR)
+            if (file.is_symlink() or not file.is_file() or
+                    file.stat().st_size != DISCOVERY2_UPLOAD_BYTES):
+                self.json(503, {"error": "DISCOVERY2_NOT_STAGED"})
+                return
+            try:
+                if not hmac.compare_digest(discovery2_sha256_file(file), DISCOVERY2_SHA256):
+                    self.json(503, {"error": "DISCOVERY2_CHECKSUM_ERROR"})
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(DISCOVERY2_UPLOAD_BYTES))
+                self.send_header("X-Content-SHA256", DISCOVERY2_SHA256)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                with file.open("rb") as source:
+                    shutil.copyfileobj(source, self.wfile, 1024 * 1024)
+            except (BrokenPipeError, ConnectionResetError):
+                log.info("Discovery2 staged catalogue download interrupted")
+            except OSError:
+                log.warning("Discovery2 catalogue download failed due to IO error")
             return
         if path == "/v1/discovery2/catalog/status":
             self.json(200, {"ok": True, **discovery2_staged_status(DATA_DIR)})

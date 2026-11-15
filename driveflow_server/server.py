@@ -38,7 +38,7 @@ from discovery_statistics import create_tables as create_statistics_tables, inde
 from province_statistics import create_tables as create_province_tables, prepare as prepare_provinces, statistics as province_statistics
 from discovery2_upload import receive_catalogue as stage_discovery2_catalogue, staged_status as discovery2_staged_status, EXPECTED_BYTES as DISCOVERY2_UPLOAD_BYTES, UploadError as Discovery2UploadError
 from discovery2_analysis import start as start_discovery2_analysis, status as discovery2_analysis_status, read_report as discovery2_read_report
-from discovery2_shadow import candidate_import as create_discovery2_preview, refresh as refresh_discovery2_preview, preview_status as discovery2_preview_status, NotReady as Discovery2NotReady
+from discovery2_shadow import candidate_import as create_discovery2_preview, refresh as refresh_discovery2_preview, preview_status as discovery2_preview_status, schedule_refresh as queue_discovery2_preview_refresh, PREVIEW_DB_LOCK as DISCOVERY2_PREVIEW_LOCK, NotReady as Discovery2NotReady
 
 VERSION = "0.6.11"
 PORT = int(os.environ.get("DRIVEFLOW_PORT", "8098"))
@@ -48,7 +48,6 @@ ROAD_CATALOG_FILE = Path(os.environ.get("DRIVEFLOW_ROADS_FILE", "/share/driveflo
 ROAD_CATALOG_SIZE = 38566582
 ROAD_CATALOG_GIT_BLOB = "fbee6ec0eb55051e94d0459e36f86c428afe08e0"
 ROAD_CATALOG_LOCK = threading.Lock()
-DISCOVERY2_PREVIEW_LOCK = threading.Lock()
 ROAD_CATALOG_CHECKED = None
 PROVINCE_STATUS_LOCK = threading.Lock()
 PROVINCE_STATUS = {"status": "wachten", "stage": "niet_gestart", "processed": 0,
@@ -576,6 +575,7 @@ class Api(BaseHTTPRequestHandler):
                     if path.endswith("/build"):
                         result = create_discovery2_preview(DATA_DIR, DB_PATH)
                         self.json(201, {"ok": True, **result})
+                        queue_discovery2_preview_refresh(DATA_DIR, DB_PATH)
                     else:
                         result = refresh_discovery2_preview(DATA_DIR, DB_PATH)
                         self.json(200, {"ok": True, **result})
@@ -641,6 +641,8 @@ class Api(BaseHTTPRequestHandler):
                     with connect_db() as db:
                         result = merge_discoveries(db, payload, now_iso())
                 self.json(200, result)
+                if result.get("added", 0) > 0:
+                    queue_discovery2_preview_refresh(DATA_DIR, DB_PATH)
             except (ValueError, TypeError, json.JSONDecodeError) as exc:
                 self.json(422, {"error": str(exc)[:140]})
             except sqlite3.Error:
@@ -815,6 +817,7 @@ def serve():
     server.geoapify_key = geoapify_key()  # type: ignore[attr-defined]
     log.info("DriveFlow Server %s ready on port %s, database in /data", VERSION, PORT)
     start_province_worker()
+    queue_discovery2_preview_refresh(DATA_DIR, DB_PATH)
     server.serve_forever(poll_interval=.5)
 
 

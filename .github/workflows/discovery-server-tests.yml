@@ -2,7 +2,7 @@ name: DriveFlow Discovery server verification
 
 on:
   push:
-    branches: [main, feature/discovery-place-parity]
+    branches: [main, feature/discovery-place-parity, feature/discovery2-national-catalog-alpha1]
     paths:
       - "driveflow_server/**"
       - ".github/workflows/discovery-server-tests.yml"
@@ -27,7 +27,7 @@ jobs:
         run: python -m compileall -q driveflow_server
       - name: Test both discovery catalogues and province recovery
         working-directory: driveflow_server
-        run: python -m unittest -v test_road_discovery_store test_discovery_places test_discovery_sync_recovery test_discovery_http_contract test_discovery_statistics test_province_statistics test_province_progress
+        run: python -m unittest -v test_road_discovery_store test_discovery_places test_discovery_sync_recovery test_discovery_http_contract test_discovery_statistics test_province_statistics test_province_progress test_discovery2_catalog_builder
       - name: Build Home Assistant app image
         run: docker build -t driveflow-discovery-test ./driveflow_server
       - name: Verify all runtime modules are included

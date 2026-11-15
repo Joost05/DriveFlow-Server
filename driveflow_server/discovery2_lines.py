@@ -214,12 +214,13 @@ def tiles(data_dir: Path, legacy_db: Path, layer: str, bbox: tuple,
         ids = set()
         for p, _ in rows[:limit]:
             ids.update(json.loads(p)["source_segment_ids"])
-        if ids:
+        id_list = sorted(ids)
+        if id_list:
             with sqlite3.connect(legacy_db.resolve().as_uri() + "?mode=ro",
                                  uri=True) as db:
                 db.execute("PRAGMA query_only=ON")
-                for batch_start in range(0, len(ids), 800):
-                    batch = list(ids)[batch_start:batch_start + 800]
+                for batch_start in range(0, len(id_list), 800):
+                    batch = id_list[batch_start:batch_start + 800]
                     marks = ",".join("?" for _ in batch)
                     known.update(row[0] for row in db.execute(
                         "SELECT segment_id FROM discovery_segments WHERE catalog=? "

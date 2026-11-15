@@ -79,6 +79,13 @@ class ShadowMigrationTest(unittest.TestCase):
                 "SELECT COUNT(*) FROM discovery2_candidate_map "
                 "WHERE new_id='v2-parallel'").fetchone()[0], 0)
 
+    def test_reject_nonfinite_geometric_offsets(self):
+        with (self.out / "comparison_candidates.csv").open("a", newline="") as out:
+            csv.writer(out).writerow(["invalid-geometry", "candidate", "legacy-a", "nan", "0"])
+        with self.assertRaises(ValueError):
+            preview.candidate_import(self.root, self.main_db)
+        self.assertFalse((self.out / "shadow_preview.sqlite").exists())
+
     def test_reject_incomplete_catalogue_report(self):
         (self.out / "comparison_report.json").write_text(json.dumps(
             {"status": "review_only", "safe_to_auto_migrate": False,

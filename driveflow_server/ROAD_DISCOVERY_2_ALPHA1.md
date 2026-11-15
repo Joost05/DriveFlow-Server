@@ -233,3 +233,38 @@ must first be delivered by the existing Android outbox. The server cannot
 mark v2 as fully ready until the Android client provides a trustworthy
 outbox-drained acknowledgement and the route candidates are reviewed.
 The server continues to report `ready_for_switch: false`.
+
+
+## Client synchronization preflight + inactive v2 download (development)
+
+The server also accepts an **advisory** client synchronization acknowledgement:
+
+- `POST /v1/discovery2/clients/sync-complete`: authenticated,
+  `X-DriveFlow-Device-Id` required, JSON body containing
+  `{"catalog":"ha-road-discovery-nl-v0.18","downloaded_cursor":123,
+    "pending_count":0,"sync_complete":true}`.
+  The server checks the device identifier, confirms the cursor equals the
+  currently visible legacy server cursor, and records the acknowledgement
+  in a separate SQLite DB. Older servers may return HTTP 404; Android
+  treats the acknowledgement as optional, **after** ordinary legacy
+  sync succeeds and the local outbox is empty.
+- `GET /v1/discovery2/clients/status`: reports the number of client
+  acknowledgements at the current legacy cursor. It **never** reports
+  `ready_for_switch:true`: the server cannot know every phone is
+  online, nor can a one-time acknowledgement guarantee its outbox stays
+  empty while GPS discovery is running.
+- `GET /v1/discovery2/catalog/download`: returns the separately staged
+  v2 catalogue only when its exact pinned SHA-256 and length pass. Uses
+  the original authentication and returns `X-Content-SHA256`.
+
+Android's separate `stageDiscovery2Catalog(onProgress)` API streams
+the full 247,931,820-byte file to its own private directory and checks
+the exact SHA-256 before a rename. This method is **not wired to an
+automatic job or UI**; it does not replace the active segment database,
+mark any new roads as discovered, or start another GPS tracker.
+
+Release blockers: real HAOS upload/download tests, conservative mapping
+review, explicit approval of source-to-target geometry, storage/memory
+measurements on Android, an atomic client/database switch with rollback,
+and functional Android Auto driving tests. Do not publish a partial
+migration as a complete v2 release.

@@ -37,6 +37,7 @@ from discovery_places import create_tables as create_place_discovery_tables, mer
 from discovery_statistics import create_tables as create_statistics_tables, index_roads, statistics as discovery_statistics
 from province_statistics import create_tables as create_province_tables, prepare as prepare_provinces, statistics as province_statistics
 from discovery2_upload import receive_catalogue as stage_discovery2_catalogue, staged_status as discovery2_staged_status, EXPECTED_BYTES as DISCOVERY2_UPLOAD_BYTES, UploadError as Discovery2UploadError
+from discovery2_analysis import start as start_discovery2_analysis, status as discovery2_analysis_status, read_report as discovery2_read_report
 
 VERSION = "0.6.11"
 PORT = int(os.environ.get("DRIVEFLOW_PORT", "8098"))
@@ -310,6 +311,14 @@ class Api(BaseHTTPRequestHandler):
         if path == "/v1/discovery2/catalog/status":
             self.json(200, {"ok": True, **discovery2_staged_status(DATA_DIR)})
             return
+        if path == "/v1/discovery2/compare/status":
+            self.json(200, discovery2_analysis_status(DATA_DIR))
+            return
+        if path == "/v1/discovery2/compare/report":
+            report = discovery2_read_report(DATA_DIR)
+            self.json(200, {"ok": True, **report} if report is not None else
+                      {"ok": False, "error": "REPORT_NOT_READY"})
+            return
         if path == "/v1/discovery/provinces/status":
             self.json(200, {"ok": True, **province_status_snapshot()})
             return
@@ -544,6 +553,21 @@ class Api(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/v1/discovery2/compare/start":
+            if not self.authenticated():
+                self.close_connection = True
+                return
+            if self.headers.get("Content-Length", "0") != "0":
+                self.close_connection = True
+                self.json(413, {"error": "geen request-body toegestaan"})
+                return
+            if not valid_road_catalog(ROAD_CATALOG_FILE):
+                self.json(503, {"error": "LEGACY_CATALOG_NOT_READY"})
+                return
+            started, reason = start_discovery2_analysis(DATA_DIR, ROAD_CATALOG_FILE, DB_PATH)
+            self.json(202 if started else 409,
+                      {"ok": started, "reason": reason, **discovery2_analysis_status(DATA_DIR)})
+            return
         if path == "/v1/discovery/provinces/retry":
             if not self.authenticated(): return
             if self.headers.get("Content-Length", "0") != "0":

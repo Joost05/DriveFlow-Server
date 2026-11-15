@@ -299,3 +299,35 @@ A whole-country comparison and audit with real catalogues must still be
 executed; no percentage or discovery retention can be asserted before that.
 Do not use its report as `discovery2_review.py` approvals, and do not switch
 Road Discovery 2.0 based on these diagnostics alone.
+
+
+## HAOS read-only migration preflight (development only)
+
+The new authenticated `GET /v1/discovery2/preflight` endpoint is **diagnostic
+only**. The route is not available on the installed v0.6.11 release; it is
+only in this unmerged development branch. Do not install it on a live HAOS
+server before isolated integration testing.
+
+The preflight checks the original
+`/share/driveflow/roads_nl.json` against the pinned legacy Git blob
+and exact byte size, opens the existing
+`/data/driveflow_server.db` with SQLite `mode=ro` and `query_only=ON`,
+counts already synchronized legacy discovery records and cursor, checks free
+space (minimum 1 GiB), and verifies staged catalogue size and SHA-256 if one
+has been uploaded. It never creates a missing database, starts a comparison,
+performs an upload, approves candidate matches, or changes any active
+discovery state.
+
+An absent staged v2 catalogue is expected before upload:
+`ready_for_catalogue_upload` can be true even when
+`discovery2_catalogue_staged_verified` is false. Neither value authorizes
+migration or v2 activation; `ready_for_migration` and `ready_for_switch`
+always remain false. Failing or unrecognized legacy catalogue identity
+prevents proceeding. No API tokens or individual segment IDs are returned.
+
+After the **separately tested** server is installed in a safe HAOS
+environment, query it locally with the normal Bearer API token. Do not post
+tokens in issues, screenshots, chat messages, or saved scripts. Use its
+`gates` and `diagnostics` to identify problems before beginning a
+national catalogue comparison. Take an app backup first and keep v0.6.11
+available as the rollback release.

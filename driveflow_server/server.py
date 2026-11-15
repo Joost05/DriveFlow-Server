@@ -358,8 +358,9 @@ class Api(BaseHTTPRequestHandler):
                 layer = args.get("layer", ["legacy"])[0]
                 bbox = tuple(float(v) for v in args["bbox"][0].split(","))
                 limit = int(args.get("limit", ["150"])[0])
+                after = int(args.get("after", ["0"])[0])
                 self.json(200, {"ok": True, **discovery2_lines_tiles(
-                    DATA_DIR, DB_PATH, layer, bbox, limit)})
+                    DATA_DIR, DB_PATH, layer, bbox, limit, after)})
             except (KeyError, ValueError, TypeError):
                 self.json(422, {"error": "INVALID_VIEWPORT_REQUEST"})
             except (OSError, sqlite3.Error, FileNotFoundError):

@@ -23,7 +23,7 @@ class ShadowMigrationTest(unittest.TestCase):
                        "seq INTEGER PRIMARY KEY AUTOINCREMENT, catalog TEXT, "
                        "segment_id TEXT, discovered_at TEXT, source TEXT)")
         (self.out / "comparison_report.json").write_text(json.dumps(
-            {"status": "review_only", "safe_to_auto_migrate": False}))
+            {"status": "review_only", "safe_to_auto_migrate": False, "counts": {"new_segments": 1393159}}))
         with (self.out / "comparison_candidates.csv").open("w", newline="") as out:
             writer = csv.writer(out)
             writer.writerow(["new_id", "status", "old_id", "offset_m", "old_discovered"])
@@ -78,6 +78,13 @@ class ShadowMigrationTest(unittest.TestCase):
             self.assertEqual(db.execute(
                 "SELECT COUNT(*) FROM discovery2_candidate_map "
                 "WHERE new_id='v2-parallel'").fetchone()[0], 0)
+
+    def test_reject_incomplete_catalogue_report(self):
+        (self.out / "comparison_report.json").write_text(json.dumps(
+            {"status": "review_only", "safe_to_auto_migrate": False,
+             "counts": {"new_segments": 100}}))
+        with self.assertRaises(preview.NotReady):
+            preview.candidate_import(self.root, self.main_db)
 
     def test_reject_wrong_compare_report(self):
         (self.out / "comparison_report.json").write_text(json.dumps(

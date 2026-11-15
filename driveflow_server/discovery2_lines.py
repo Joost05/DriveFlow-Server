@@ -187,9 +187,10 @@ def start_build(data_dir: Path) -> bool:
 
 
 def tiles(data_dir: Path, legacy_db: Path, layer: str, bbox: tuple,
-          limit: int = MAX_LINES) -> dict:
+          limit: int = MAX_LINES, after: int = 0) -> dict:
     """Return partial-colored polyline pieces, never a falsely green full road."""
-    if layer not in LAYERS or not 1 <= limit <= MAX_LINES:
+    if (layer not in LAYERS or not isinstance(limit, int) or not 1 <= limit <= MAX_LINES
+            or not isinstance(after, int) or after < 0):
         raise ValueError("Invalid layer or limit")
     if (len(bbox) != 4 or not all(math.isfinite(v) for v in bbox) or
             bbox[0] >= bbox[2] or bbox[1] >= bbox[3] or
@@ -201,10 +202,10 @@ def tiles(data_dir: Path, legacy_db: Path, layer: str, bbox: tuple,
         raise FileNotFoundError("Connected lines index not ready")
     with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as index:
         rows = index.execute(
-            "SELECT l.properties,l.coordinates FROM bounds b JOIN lines l ON b.fid=l.fid "
-            "WHERE l.layer=? AND b.maxx>=? AND b.minx<=? AND b.maxy>=? AND b.miny<=? "
-            "ORDER BY l.fid LIMIT ?",
-            (layer, bbox[0], bbox[2], bbox[1], bbox[3], limit + 1)
+            "SELECT l.fid,l.properties,l.coordinates FROM bounds b JOIN lines l ON b.fid=l.fid "
+            "WHERE l.layer=? AND l.fid>? AND b.maxx>=? AND b.minx<=? "
+            "AND b.maxy>=? AND b.miny<=? ORDER BY l.fid LIMIT ?",
+            (layer, after, bbox[0], bbox[2], bbox[1], bbox[3], limit + 1)
         ).fetchall()
     results = []
     known = set()
@@ -212,7 +213,7 @@ def tiles(data_dir: Path, legacy_db: Path, layer: str, bbox: tuple,
         if legacy_db.is_symlink() or not legacy_db.is_file():
             raise FileNotFoundError("Active discovery database missing")
         ids = set()
-        for p, _ in rows[:limit]:
+        for _, p, _ in rows[:limit]:
             ids.update(json.loads(p)["source_segment_ids"])
         id_list = sorted(ids)
         if id_list:
@@ -225,16 +226,18 @@ def tiles(data_dir: Path, legacy_db: Path, layer: str, bbox: tuple,
                     known.update(row[0] for row in db.execute(
                         "SELECT segment_id FROM discovery_segments WHERE catalog=? "
                         "AND segment_id IN (" + marks + ")", (LEGACY_CATALOG, *batch)))
-    for raw_props, raw_coords in rows[:limit]:
+    for fid, raw_props, raw_coords in rows[:limit]:
         props, coords = json.loads(raw_props), json.loads(raw_coords)
         ids = props["source_segment_ids"]
         # Pieces correspond 1:1 with the retained original segment IDs.
         results.append({
-            "road": props.get("road"), "layer": layer,
+            "line_id": fid, "road": props.get("road"), "layer": layer,
             "parts": [{"id": sid, "coordinates": [coords[i], coords[i + 1]],
                        "state": ("discovered" if sid in known else "undiscovered")
                        if layer == "legacy" else "unverified"}
                       for i, sid in enumerate(ids)]
         })
-    return {"layer": layer, "lines": results, "truncated": len(rows) > limit,
+    has_more = len(rows) > limit
+    return {"layer": layer, "lines": results, "truncated": has_more,
+            "next_after": rows[limit - 1][0] if has_more else None,
             "active": False, "v2_progress_migrated": False}

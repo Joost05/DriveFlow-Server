@@ -33,10 +33,10 @@ class PreflightTests(unittest.TestCase):
 
     def test_verified_legacy_catalogue_and_free_disk_allow_upload(self):
         self.legacy.write_bytes(b"example")
-        with patch.object(preflight, "LEGACY_EXPECTED_SIZE", len(b"example")), \\
-             patch.object(preflight, "LEGACY_EXPECTED_GIT_BLOB",
-                          preflight._git_blob_sha1(self.legacy)):
-            result = preflight.evaluate(self.root, self.legacy, self.db_path)
+        with patch.object(preflight, "LEGACY_EXPECTED_SIZE", len(b"example")):
+            with patch.object(preflight, "LEGACY_EXPECTED_GIT_BLOB",
+                              preflight._git_blob_sha1(self.legacy)):
+                result = preflight.evaluate(self.root, self.legacy, self.db_path)
         self.assertTrue(result["ready_for_catalogue_upload"])
         self.assertFalse(result["ready_for_migration"])
         self.assertEqual(self.db_path.read_bytes(), self.before)

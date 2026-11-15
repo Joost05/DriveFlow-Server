@@ -68,6 +68,7 @@ def _work(data_dir: Path, legacy_file: Path, db_path: Path):
     global WORKER
     report, candidate_map = _paths(data_dir)
     partial_map = candidate_map.with_suffix(".csv.partial")
+    partial_report = report.with_suffix(".json.partial")
     try:
         _progress("checking_files", 0)
         new = catalogue_path(data_dir)
@@ -77,7 +78,7 @@ def _work(data_dir: Path, legacy_file: Path, db_path: Path):
             raise ValueError("De nieuwe catalogus voldoet niet aan de SHA256-controle")
         if not legacy_file.is_file() or legacy_file.is_symlink():
             raise ValueError("De oorspronkelijke wegenkaart ontbreekt")
-        if report.exists() or candidate_map.exists() or partial_map.exists():
+        if report.exists() or candidate_map.exists() or partial_map.exists() or partial_report.exists():
             raise FileExistsError("Vergelijkingsresultaat bestaat al; bestaande bestanden worden niet overschreven")
         if shutil.disk_usage(data_dir).free < MIN_FREE_BYTES:
             raise ValueError("Minimaal 1 GiB vrije schijfruimte vereist voor index en rapport")
@@ -95,7 +96,7 @@ def _work(data_dir: Path, legacy_file: Path, db_path: Path):
                 (LEGACY_CATALOG,),
             ).fetchone()[0]
         _progress("indexing_old", 0)
-        result = compare(legacy_file, new, report,
+        result = compare(legacy_file, new, partial_report,
                          discovered_ids=discovered, mapping=partial_map,
                          progress=_progress, temporary_parent=data_dir / "discovery2")
         # The report is only a snapshot: newer synchronized or offline data
@@ -107,6 +108,7 @@ def _work(data_dir: Path, legacy_file: Path, db_path: Path):
         report.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n",
                           encoding="utf-8")
         os.replace(partial_map, candidate_map)
+        os.replace(partial_report, report)
         with LOCK:
             STATUS.update(state="complete", stage="report_ready",
                           processed=result["counts"]["new_segments"],
@@ -116,6 +118,7 @@ def _work(data_dir: Path, legacy_file: Path, db_path: Path):
         log.warning("Discovery2 comparison failed: %s", type(exc).__name__)
         # Reports from a failed worker are not trusted.
         partial_map.unlink(missing_ok=True)
+        partial_report.unlink(missing_ok=True)
         with LOCK:
             STATUS.update(state="error", stage="failed",
                           error=str(exc)[:180], updated_at=_now())

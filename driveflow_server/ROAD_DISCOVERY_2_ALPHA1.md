@@ -44,3 +44,45 @@ Highway class alone is never used to invent a speed.
 The generator is deliberately not imported or run by `server.py`. It requires
 no new dependency in the Home Assistant add-on image. Nothing is pushed to
 Google Play or the running server in alpha1.
+
+
+## Compare old and new catalogues locally (read-only)
+
+The original HA A/N file is usually stored at
+`/config/custom_components/road_discovery/roads_nl.json` or copied to
+`/share/driveflow/roads_nl.json`. This must be the **original old** JSON
+file (approximately 39 MB), not the HA discoveries export.
+
+Copy `roads_nl.json` to `D:\DriveFlow\RoadDiscovery2\` on Windows,
+alongside the already-generated `roads_nl_2_alpha1.json`. Download the
+`compare_discovery2_catalogs.py` script from this feature branch into
+the same Windows directory.
+
+Run these commands from PowerShell inside that directory:
+
+```powershell
+py -m pip install ijson
+py .\compare_discovery2_catalogs.py .\roads_nl.json .\roads_nl_2_alpha1.json .\comparison_report.json
+```
+
+Optional: to calculate how many existing *discovered* IDs have geometric
+candidates, export the old Home Assistant discovered ID list as
+`old_discoveries.json` in the form `{"ids":["old-id", "..."]}` and run:
+
+```powershell
+py .\compare_discovery2_catalogs.py .\roads_nl.json .\roads_nl_2_alpha1.json .\comparison_with_discoveries.json --discovered .\old_discoveries.json
+```
+
+For a per-segment review CSV (potentially very large), append
+`--mapping .\comparison_candidates.csv`. Never use the CSV as a
+confirmed migration map without further review. Outputs must be new files
+and are never overwritten automatically.
+
+The report distinguishes `candidate`, `ambiguous`, `new` and
+`invalid_geometry`. Candidate means **possible geographic overlap**
+only; it does not prove road identity or safe migration, especially
+where lanes, intersections or offset geometries differ. Direction
+agreement within 25 degrees and endpoint distance <=10m are required,
+with nearly-tied candidates rejected. Existing discoveries are never
+changed. The old catalogue, new catalogue and running server remain
+untouched. The comparison scans the full new file and may take a while.

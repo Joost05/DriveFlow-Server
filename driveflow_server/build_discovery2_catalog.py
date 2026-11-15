@@ -111,7 +111,6 @@ def generate(pbf: Path, output: Path) -> dict:
         raise FileExistsError("Output already exists; never overwrite an existing catalogue")
     output.parent.mkdir(parents=True, exist_ok=True)
     stats = Counter()
-    seen = set()
 
     class Collector(osmium.SimpleHandler):
         def __init__(self, handle):
@@ -129,21 +128,23 @@ def generate(pbf: Path, output: Path) -> dict:
             highway = tags["highway"]
             road = tags.get("name") or tags.get("ref") or f"OSM weg {way.id}"
             stats["eligible_ways"] += 1
-            for a, b in zip(way.nodes, list(way.nodes)[1:]):
+            nodes = list(way.nodes)
+            seen_on_way = set()
+            for a, b in zip(nodes, nodes[1:]):
                 if not a.location.valid() or not b.location.valid():
                     stats["invalid_locations"] += 1
                     continue
-                a_pt = (round(a.lon, 7), round(a.lat, 7))
-                b_pt = (round(b.lon, 7), round(b.lat, 7))
+                a_pt = (round(a.location.lon, 7), round(a.location.lat, 7))
+                b_pt = (round(b.location.lon, 7), round(b.location.lat, 7))
                 length = length_metres(a_pt, b_pt)
                 if not 0.1 <= length <= 100_000:
                     stats["invalid_lengths"] += 1
                     continue
                 sid = segment_id(way.id, a.ref, b.ref)
-                if sid in seen:
+                if sid in seen_on_way:
                     stats["duplicate_ids"] += 1
                     continue
-                seen.add(sid)
+                seen_on_way.add(sid)
                 segment = {
                     "id": sid, "road": road, "a": a_pt, "b": b_pt,
                     "length_m": round(length, 3), "highway": highway,

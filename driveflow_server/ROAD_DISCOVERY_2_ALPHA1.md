@@ -268,3 +268,34 @@ review, explicit approval of source-to-target geometry, storage/memory
 measurements on Android, an atomic client/database switch with rollback,
 and functional Android Auto driving tests. Do not publish a partial
 migration as a complete v2 release.
+
+
+## Nationwide candidate risk audit (review branch; no activation)
+
+After comparison completes, the server can inspect its own candidate CSV and
+optionally count the **currently synchronized** legacy discoveries, without
+altering any source. Run locally with Python 3.12, or inside a test add-on
+container with the appropriate read-only copies mounted:
+
+```sh
+python discovery2_audit.py /data/discovery2/comparison_candidates.csv \
+  /data/discovery2/candidate_audit.json --legacy-db /data/driveflow.db
+```
+
+**Important:** `/data/driveflow.db` above is illustrative; find the server's
+actual `DB_PATH` in its configuration before running. Use the real path, or
+omit `--legacy-db` to audit only the comparison CSV. The report path must be
+new, and cannot overwrite a previous report.
+
+This audit streams the mapping CSV into a temporary on-disk SQLite index,
+not into RAM. It reports ambiguous candidates, offsets of 7–10 metres,
+old segments represented by multiple new segments (a review signal, not
+necessarily an error), and unmatched/invalid geometry. It also reports how
+many discovered legacy IDs on the server have geometric candidates, if a
+read-only DB is supplied. Output is `manual_review_required`, **not** an
+automated approval file.
+
+A whole-country comparison and audit with real catalogues must still be
+executed; no percentage or discovery retention can be asserted before that.
+Do not use its report as `discovery2_review.py` approvals, and do not switch
+Road Discovery 2.0 based on these diagnostics alone.

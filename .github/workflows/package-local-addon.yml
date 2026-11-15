@@ -81,12 +81,3 @@ jobs:
           print(f"{dest}: {dest.stat().st_size} bytes")
           PY
           sha256sum DriveFlow_Server_v0.6.12-beta1_local.zip
-
-      - name: Upload temporary ZIP for local addon installation
-        uses: actions/upload-artifact@v4
-        with:
-          name: DriveFlow_Server_v0.6.12-beta1_local
-          path: DriveFlow_Server_v0.6.12-beta1_local.zip
-          retention-days: 1
-          compression-level: 0
-          if-no-files-found: error

@@ -33,3 +33,16 @@ jobs:
       - name: Verify all runtime modules are included
         run: |
           docker run --rm --entrypoint python driveflow-discovery-test -c "import server, discovery_places, road_discovery_store, province_statistics, discovery2_readiness, discovery2_shadow, discovery2_clients, discovery2_review, discovery2_audit, discovery2_preflight"
+      - name: Smoke test isolated running container and read-only preflight
+        env:
+          SMOKE_TOKEN: "test-only-driveflow-token-at-least-32-chars"
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/driveflow-smoke-data"
+          docker run -d --name driveflow-discovery-smoke \
+            -e DRIVEFLOW_TOKEN="$SMOKE_TOKEN" \
+            -v "$RUNNER_TEMP/driveflow-smoke-data:/data" \
+            -p 127.0.0.1:18098:8098 driveflow-discovery-test
+          trap 'docker logs driveflow-discovery-smoke; docker rm -f driveflow-discovery-smoke' EXIT
+          SMOKE_DATA_DIR="$RUNNER_TEMP/driveflow-smoke-data" \
+            python driveflow_server/smoke_discovery2_container.py

@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import os
+import threading
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -24,6 +26,11 @@ from discovery2_upload import REVISION as V2_CATALOGUE
 
 BATCH = 5000
 SCHEMA_VERSION = "discovery2-shadow-v1"
+PREVIEW_DB_LOCK = threading.Lock()
+_SCHEDULE_LOCK = threading.Lock()
+_REFRESH_THREAD = None
+_REFRESH_PENDING = False
+log = logging.getLogger("driveflow.discovery2.shadow")
 
 
 class NotReady(RuntimeError):
@@ -206,3 +213,45 @@ def preview_status(data_dir: Path):
             "confirmed_discovered_segments": 0,
             "activated": False, "ready_for_switch": False,
         }
+
+
+def schedule_refresh(data_dir: Path, server_db_path: Path):
+    """Queue background replay after normal legacy merge or server restart.
+
+    The existing legacy merge always succeeds independently of preview errors.
+    Only runs if the preview has already been created. Thread coalesces
+    concurrent requests; pending flag prevents losing a sync during replay.
+    """
+    global _REFRESH_PENDING, _REFRESH_THREAD
+    path = data_dir / "discovery2" / "shadow_preview.sqlite"
+    if not path.is_file() or path.is_symlink():
+        return False
+    with _SCHEDULE_LOCK:
+        _REFRESH_PENDING = True
+        if _REFRESH_THREAD is None or not _REFRESH_THREAD.is_alive():
+            _REFRESH_THREAD = threading.Thread(
+                target=_refresh_worker, args=(data_dir, server_db_path),
+                daemon=True, name="discovery2-preview-refresh")
+            _REFRESH_THREAD.start()
+    return True
+
+
+def _refresh_worker(data_dir: Path, server_db_path: Path):
+    global _REFRESH_PENDING, _REFRESH_THREAD
+    try:
+        while True:
+            with _SCHEDULE_LOCK:
+                _REFRESH_PENDING = False
+            with PREVIEW_DB_LOCK:
+                result = refresh(data_dir, server_db_path)
+            if not result["caught_up_with_server"]:
+                continue
+            with _SCHEDULE_LOCK:
+                if _REFRESH_PENDING:
+                    continue
+                _REFRESH_THREAD = None
+                return
+    except Exception as exc:
+        log.warning("Discovery2 preview refresh failed: %s", type(exc).__name__)
+        with _SCHEDULE_LOCK:
+            _REFRESH_THREAD = None

@@ -121,12 +121,14 @@ def build_reviewed_preview(data_dir: Path, decisions_path: Path) -> dict:
                 target.executemany("INSERT INTO review_metadata VALUES (?,?)", metadata.items())
         # Never replace even when multiple builders race.
         os.link(temp, destination)
+        with sqlite3.connect(destination.resolve().as_uri() + "?mode=ro", uri=True) as counted:
+            discovered_approved = counted.execute(
+                "SELECT COUNT(*) FROM reviewed_progress"
+            ).fetchone()[0]
         return {
             "status": "reviewed_preview_only",
             "approved_pairs": len(pairs),
-            "discovered_approved_pairs": sqlite3.connect(
-                f"{destination.resolve().as_uri()}?mode=ro", uri=True
-            ).execute("SELECT COUNT(*) FROM reviewed_progress").fetchone()[0],
+            "discovered_approved_pairs": discovered_approved,
             "snapshot_only": True,
             "activated": False,
             "ready_for_switch": False,

@@ -87,7 +87,7 @@ def candidate_score(new, old):
     return worst if worst <= MATCH_M else None
 
 
-def old_index(db, legacy_path: Path):
+def old_index(db, legacy_path: Path, progress=None):
     db.execute("CREATE TABLE lines (rid INTEGER PRIMARY KEY, sid TEXT NOT NULL UNIQUE, "
                "road TEXT, ax REAL, ay REAL, bx REAL, by REAL)")
     db.execute("CREATE VIRTUAL TABLE search USING rtree(rid, minx, maxx, miny, maxy)")
@@ -106,6 +106,8 @@ def old_index(db, legacy_path: Path):
         total += 1
         if total % 10_000 == 0:
             db.commit()
+            if progress is not None:
+                progress("indexing_old", total)
     db.commit()
     return total, invalid
 
@@ -149,7 +151,9 @@ def read_discovered(path: Path | None):
 
 
 def compare(legacy: Path, newer: Path, report: Path,
-            discovered: Path | None = None, mapping: Path | None = None):
+            discovered: Path | None = None, mapping: Path | None = None,
+            discovered_ids: set[str] | None = None, progress=None,
+            temporary_parent: Path | None = None):
     for path in (legacy, newer):
         if not path.is_file():
             raise FileNotFoundError(path)
@@ -158,16 +162,18 @@ def compare(legacy: Path, newer: Path, report: Path,
             raise FileExistsError("Output already exists: " + str(path))
     if legacy.resolve() == newer.resolve():
         raise ValueError("Old and new catalogue must be different files")
-    old_ids = read_discovered(discovered)
+    if discovered is not None and discovered_ids is not None:
+        raise ValueError("Provide discovered OR discovered_ids, never both")
+    old_ids = set(discovered_ids) if discovered_ids is not None else read_discovered(discovered)
     counts = Counter()
     matched_old_ids = set()
     matched_discovered_ids = set()
     sample = []
     # Never store temporary DB beside either input or in application data.
-    with tempfile.TemporaryDirectory(prefix="driveflow-d2-compare-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="driveflow-d2-compare-", dir=temporary_parent) as tmp:
         db = sqlite3.connect(str(Path(tmp) / "index.sqlite"))
         try:
-            old_total, old_invalid = old_index(db, legacy)
+            old_total, old_invalid = old_index(db, legacy, progress=progress)
             counts["old_segments"] = old_total
             counts["old_invalid"] = old_invalid
             writer = None
@@ -180,6 +186,8 @@ def compare(legacy: Path, newer: Path, report: Path,
                     writer.writerow(("new_id", "status", "old_id", "offset_m", "old_discovered"))
                 for seg in stream_segments(newer):
                     counts["new_segments"] += 1
+                    if progress is not None and counts["new_segments"] % 10_000 == 0:
+                        progress("comparing_new", counts["new_segments"])
                     status, old_id, distance = match_segment(db, seg)
                     counts[status] += 1
                     is_discovered = old_ids is not None and old_id in old_ids

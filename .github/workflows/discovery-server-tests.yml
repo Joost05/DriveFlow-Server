@@ -27,7 +27,7 @@ jobs:
         run: python -m compileall -q driveflow_server
       - name: Test both discovery catalogues and province recovery
         working-directory: driveflow_server
-        run: python -m unittest -v test_road_discovery_store test_discovery_places test_discovery_sync_recovery test_discovery_http_contract test_discovery_statistics test_province_statistics test_province_progress test_discovery2_catalog_builder test_compare_discovery2_catalogs test_discovery2_upload test_discovery2_analysis test_discovery2_shadow test_discovery2_clients test_discovery2_readiness test_discovery2_review test_discovery2_audit test_discovery2_preflight test_discovery2_append_catalog test_discovery2_lines
+        run: python -m unittest -v test_road_discovery_store test_discovery_places test_discovery_sync_recovery test_discovery_http_contract test_discovery_statistics test_province_statistics test_province_progress test_discovery2_catalog_builder test_compare_discovery2_catalogs test_discovery2_upload test_discovery2_analysis test_discovery2_shadow test_discovery2_clients test_discovery2_readiness test_discovery2_review test_discovery2_audit test_discovery2_preflight test_discovery2_append_catalog test_discovery2_lines test_in_place_upgrade
       - name: Build Home Assistant app image
         run: docker build -t driveflow-discovery-test ./driveflow_server
       - name: Verify all runtime modules are included

@@ -7,9 +7,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from discovery2_review import build_reviewed_preview, REVIEW_SCHEMA
+from discovery2_review import build_reviewed_preview, refresh_reviewed_preview, REVIEW_SCHEMA
 from discovery2_shadow import create_tables, SCHEMA_VERSION
 from discovery2_upload import REVISION
+from road_discovery_store import CATALOG
 
 
 class ReviewedMigrationTest(unittest.TestCase):
@@ -88,6 +89,47 @@ class ReviewedMigrationTest(unittest.TestCase):
         self.decisions([{"new_id": "v2-good", "old_id": "legacy-good"}] * 2)
         with self.assertRaises(ValueError):
             build_reviewed_preview(self.root, self.review_path)
+
+    def test_incremental_replay_including_offline_arrivals_and_retry(self):
+        self.decisions([{"new_id": "v2-good", "old_id": "legacy-good"}])
+        build_reviewed_preview(self.root, self.review_path)
+        with sqlite3.connect(self.live) as db:
+            db.execute("CREATE TABLE discovery_segments (seq INTEGER PRIMARY KEY, "
+                       "catalog TEXT,segment_id TEXT,discovered_at TEXT,source TEXT)")
+            db.execute("INSERT INTO discovery_segments VALUES (1,?,?,?,?)",
+                       (CATALOG, "other", "2026-11-15T11:00:00Z", "android"))
+        first = refresh_reviewed_preview(self.root, self.live, batch=1)
+        self.assertEqual(first["approved_discovered_segments"], 0)
+        self.assertTrue(first["caught_up_with_server"])
+        # Simulate an Android offline outbox upload arriving later.
+        with sqlite3.connect(self.live) as db:
+            db.execute("INSERT INTO discovery_segments VALUES (2,?,?,?,?)",
+                       (CATALOG, "legacy-good", "2026-11-14T07:00:00Z", "android-offline"))
+        second = refresh_reviewed_preview(self.root, self.live, batch=1)
+        self.assertEqual(second["approved_discovered_segments"], 1)
+        self.assertEqual(second["legacy_cursor_processed"], 2)
+        self.assertFalse(second["pending_android_outbox_verified_empty"])
+        retry = refresh_reviewed_preview(self.root, self.live)
+        self.assertEqual(retry["processed_legacy_events"], 0)
+        self.assertEqual(retry["approved_discovered_segments"], 1)
+        with sqlite3.connect(self.d2 / "reviewed_preview.sqlite") as db:
+            self.assertEqual(
+                db.execute("SELECT discovered_at,source FROM reviewed_progress").fetchone(),
+                ("2026-11-14T07:00:00Z", "android-offline")
+            )
+        with sqlite3.connect(self.live) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM discovery_segments").fetchone()[0], 2)
+
+    def test_replay_error_does_not_advance_cursor(self):
+        self.decisions([{"new_id": "v2-good", "old_id": "legacy-good"}])
+        build_reviewed_preview(self.root, self.review_path)
+        with self.assertRaises(sqlite3.OperationalError):
+            refresh_reviewed_preview(self.root, self.live)
+        with sqlite3.connect(self.d2 / "reviewed_preview.sqlite") as db:
+            self.assertEqual(
+                db.execute("SELECT value FROM review_metadata "
+                           "WHERE key='last_legacy_seq'").fetchone()[0], "0"
+            )
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from discovery2_upload import staged_status
+from discovery2_upload import staged_status, catalogue_path, sha256_file, EXPECTED_SHA256
 from discovery2_analysis import read_report
 from discovery2_shadow import preview_status
 from discovery2_clients import status as client_status
@@ -19,7 +19,12 @@ from road_discovery_store import CATALOG as LEGACY
 def evaluate(data_dir: Path, db_path: Path) -> dict:
     gates = {}
     catalogue = staged_status(data_dir)
-    gates["catalogue_staged"] = catalogue.get("state") == "staged"
+    # Status only verifies file length. A release gate must also re-hash
+    # the pinned 248MB file instead of trusting the directory entry.
+    gates["catalogue_staged"] = (
+        catalogue.get("state") == "staged"
+        and sha256_file(catalogue_path(data_dir)) == EXPECTED_SHA256
+    )
     report = read_report(data_dir)
     gates["comparison_completed"] = bool(
         isinstance(report, dict) and report.get("status") == "review_only"

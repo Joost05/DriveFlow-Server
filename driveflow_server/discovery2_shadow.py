@@ -82,6 +82,11 @@ def _mapping_file(data_dir: Path):
         summary = json.load(handle)
     if summary.get("status") != "review_only" or summary.get("safe_to_auto_migrate") is not False:
         raise NotReady("Het vergelijkingsrapport heeft een onverwachte status")
+    # Never import a candidate CSV from a report for a different national
+    # catalogue. The comparison itself is not an approval.
+    counts = summary.get("counts")
+    if not isinstance(counts, dict) or counts.get("new_segments") != 1_393_159:
+        raise NotReady("Vergelijkingsrapport hoort niet bij de volledige 2.0-catalogus")
     return mapping
 
 

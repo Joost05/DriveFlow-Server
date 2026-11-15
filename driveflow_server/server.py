@@ -38,6 +38,7 @@ from discovery_statistics import create_tables as create_statistics_tables, inde
 from province_statistics import create_tables as create_province_tables, prepare as prepare_provinces, statistics as province_statistics
 from discovery2_upload import receive_catalogue as stage_discovery2_catalogue, staged_status as discovery2_staged_status, EXPECTED_BYTES as DISCOVERY2_UPLOAD_BYTES, UploadError as Discovery2UploadError
 from discovery2_analysis import start as start_discovery2_analysis, status as discovery2_analysis_status, read_report as discovery2_read_report
+from discovery2_shadow import candidate_import as create_discovery2_preview, refresh as refresh_discovery2_preview, preview_status as discovery2_preview_status, NotReady as Discovery2NotReady
 
 VERSION = "0.6.11"
 PORT = int(os.environ.get("DRIVEFLOW_PORT", "8098"))
@@ -47,6 +48,7 @@ ROAD_CATALOG_FILE = Path(os.environ.get("DRIVEFLOW_ROADS_FILE", "/share/driveflo
 ROAD_CATALOG_SIZE = 38566582
 ROAD_CATALOG_GIT_BLOB = "fbee6ec0eb55051e94d0459e36f86c428afe08e0"
 ROAD_CATALOG_LOCK = threading.Lock()
+DISCOVERY2_PREVIEW_LOCK = threading.Lock()
 ROAD_CATALOG_CHECKED = None
 PROVINCE_STATUS_LOCK = threading.Lock()
 PROVINCE_STATUS = {"status": "wachten", "stage": "niet_gestart", "processed": 0,
@@ -311,6 +313,12 @@ class Api(BaseHTTPRequestHandler):
         if path == "/v1/discovery2/catalog/status":
             self.json(200, {"ok": True, **discovery2_staged_status(DATA_DIR)})
             return
+        if path == "/v1/discovery2/preview/status":
+            try:
+                self.json(200, {"ok": True, **discovery2_preview_status(DATA_DIR)})
+            except (Discovery2NotReady, sqlite3.Error, OSError):
+                self.json(503, {"error": "PREVIEW_NOT_READY"})
+            return
         if path == "/v1/discovery2/compare/status":
             self.json(200, discovery2_analysis_status(DATA_DIR))
             return
@@ -553,6 +561,32 @@ class Api(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path in ("/v1/discovery2/preview/build", "/v1/discovery2/preview/refresh"):
+            if not self.authenticated():
+                self.close_connection = True
+                return
+            if self.headers.get("Content-Length", "0") != "0":
+                self.close_connection = True
+                self.json(413, {"error": "geen request-body toegestaan"})
+                return
+            # Serialize refresh and preview build; these are administrative,
+            # potentially long-running operations. Never update live discovery tables.
+            try:
+                with DISCOVERY2_PREVIEW_LOCK:
+                    if path.endswith("/build"):
+                        result = create_discovery2_preview(DATA_DIR, DB_PATH)
+                        self.json(201, {"ok": True, **result})
+                    else:
+                        result = refresh_discovery2_preview(DATA_DIR, DB_PATH)
+                        self.json(200, {"ok": True, **result})
+            except FileExistsError:
+                self.json(409, {"error": "preview bestaat al"})
+            except (Discovery2NotReady, ValueError) as exc:
+                self.json(409, {"error": str(exc)[:160]})
+            except (OSError, sqlite3.Error) as exc:
+                log.warning("Discovery2 preview operation failed: %s", type(exc).__name__)
+                self.json(503, {"error": "PREVIEW_OPERATION_FAILED"})
+            return
         if path == "/v1/discovery2/compare/start":
             if not self.authenticated():
                 self.close_connection = True

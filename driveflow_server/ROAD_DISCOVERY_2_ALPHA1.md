@@ -86,3 +86,46 @@ agreement within 25 degrees and endpoint distance <=10m are required,
 with nearly-tied candidates rejected. Existing discoveries are never
 changed. The old catalogue, new catalogue and running server remain
 untouched. The comparison scans the full new file and may take a while.
+
+
+## Experimental server-side staged upload (not released; do not install yet)
+
+This feature branch now exposes **authenticated**, revision-pinned routes:
+
+- `PUT /v1/discovery2/catalog/stage` accepts exactly 247,931,820 bytes of
+  `application/json` via streaming with the header
+  `X-Content-SHA256: 2aeb95e57db9f23cc046d7ffd1fa14edc73bdebd79c0b57c82aba5b7763d2ffe`.
+  The actual bytes are hashed while streaming; a client-provided digest alone
+  is insufficient. A partial or invalid file is deleted.
+- `GET /v1/discovery2/catalog/status` reports whether the known version
+  is staged. This route and the upload both require the same Bearer API token
+  as other DriveFlow endpoints.
+
+The new file is stored at `/data/discovery2/roads_nl_2_alpha1.json`;
+the old `/share/driveflow/roads_nl.json`, legacy endpoints, existing
+discovery DB and Android installation **are not modified**. Overwrites are
+rejected (HTTP 409). This is **staging only**: no comparison, migration,
+activation, Android sync or Play deployment is included yet.
+
+After the revised add-on is explicitly reviewed, installed, and verified,
+use a machine on the same LAN as Home Assistant. In PowerShell:
+
+```powershell
+cd D:\DriveFlow\RoadDiscovery2
+$server = "http://<HOME_ASSISTANT_IP>:8098"
+$token = Read-Host "DriveFlow API-token"
+curl.exe --fail-with-body -X PUT "$server/v1/discovery2/catalog/stage" -H "Authorization: Bearer $token" -H "Content-Type: application/json" -H "X-Content-SHA256: 2aeb95e57db9f23cc046d7ffd1fa14edc73bdebd79c0b57c82aba5b7763d2ffe" --data-binary "@roads_nl_2_alpha1.json"
+curl.exe --fail-with-body "$server/v1/discovery2/catalog/status" -H "Authorization: Bearer $token"
+Remove-Variable token
+```
+
+**Do not use the Cloudflare tunnel for this 248 MB upload.**
+Upload from a trusted local network directly to the LAN IP on port 8098;
+public reverse proxies can impose body-size and request-duration limits.
+Do not paste API tokens in chats, screenshots, or a saved script.
+
+Release gates remaining: exercise real HTTP upload on test HAOS instance,
+disk space checks, safe deployment/rollback, server-side legacy comparison,
+mapping of synchronized **and pending offline** discoveries, verified activation
+and Android opt-in download. No database migration should be enabled until
+these pass.

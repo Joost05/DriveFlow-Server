@@ -91,6 +91,9 @@ class ReviewedMigrationTest(unittest.TestCase):
             build_reviewed_preview(self.root, self.review_path)
 
     def test_incremental_replay_including_offline_arrivals_and_retry(self):
+        # This scenario begins with no previously discovered approved pair.
+        with sqlite3.connect(self.shadow) as db:
+            db.execute("DELETE FROM discovery2_preview_progress")
         self.decisions([{"new_id": "v2-good", "old_id": "legacy-good"}])
         build_reviewed_preview(self.root, self.review_path)
         with sqlite3.connect(self.live) as db:

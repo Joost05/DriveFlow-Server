@@ -55,6 +55,25 @@ class ConnectedLineTests(unittest.TestCase):
                          ["unverified", "unverified"])
         self.assertEqual(self.before, self.live.read_bytes())
 
+    def test_viewport_pagination_does_not_drop_roads(self):
+        with sqlite3.connect(self.index) as db:
+            db.execute("INSERT INTO lines VALUES (3,?,?,?)",
+                       ("legacy", json.dumps({"road": "N50", "source_segment_ids": ["N50"]}),
+                        json.dumps([[5.003, 52.0], [5.004, 52.0]])))
+            db.execute("INSERT INTO bounds VALUES (3,5.003,5.004,52.0,52.0)")
+            db.commit()
+        first = lines.tiles(self.root, self.live, "legacy",
+                            (4.99, 51.99, 5.01, 52.01), limit=1)
+        self.assertTrue(first["truncated"])
+        self.assertEqual(first["next_after"], 1)
+        second = lines.tiles(self.root, self.live, "legacy",
+                             (4.99, 51.99, 5.01, 52.01), limit=1,
+                             after=first["next_after"])
+        self.assertFalse(second["truncated"])
+        self.assertEqual([p["id"] for p in second["lines"][0]["parts"]], ["N50"])
+        self.assertIsNone(second["next_after"])
+        self.assertEqual(self.before, self.live.read_bytes())
+
     def test_bbox_and_limit_rejected(self):
         for bbox in [(0, 0, 1, 1), (5, 52, 4, 53), (float("nan"), 52, 5, 53)]:
             with self.assertRaises(ValueError):

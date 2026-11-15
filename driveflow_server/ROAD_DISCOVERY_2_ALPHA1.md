@@ -405,3 +405,23 @@ This preview is not production-ready: no Play version has been built, no
 genuine 29 MB upload has been performed on the Odroid, and the large
 RTree build has not been benchmarked on HAOS aarch64. Keep the installed
 v0.6.11 service untouched.
+
+
+### Verified full-dataset dry run (2026-11-15)
+
+The two uploaded connected `.geojson.gz` files were scanned in their entirety:
+- legacy: 75,309 lines, 250,620 original unique segment IDs, zero topology cardinality errors
+- OSM: 158,225 lines, 1,393,159 original unique segment IDs, zero topology cardinality errors
+
+An independent SQLite/RTree import using the same table and RTree schemas
+on the developer runtime completed in approximately 8.5 seconds, with a
+169,091,072-byte index. This is **not** an HAOS/Odroid performance result.
+A sample bbox `5.9,52.1,6.0,52.2` returned 173 legacy lines and
+308 OSM lines, showing why 250-line pages alone are insufficient.
+
+The viewport endpoint now supports immutable line-ID cursor pagination:
+`GET /v1/discovery2/lines/viewport?layer=osm&bbox=5.9,52.1,6.0,52.2&limit=150&after=0`.
+If `truncated: true`, repeat with `after=next_after` until
+`truncated: false`. Keep layer and bbox fixed across pages and restart
+from `after=0` after moving/zooming the viewport. The query remains
+preview-only and does not alter the user's discovery state.

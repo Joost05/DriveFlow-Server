@@ -105,7 +105,7 @@ def _work(data_dir: Path, legacy_file: Path, db_path: Path):
         result["synchronized_discoveries_snapshot"] = len(discovered)
         result["requires_offline_outbox_reconciliation"] = True
         result["safe_to_auto_migrate"] = False
-        report.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n",
+        partial_report.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n",
                           encoding="utf-8")
         os.replace(partial_map, candidate_map)
         os.replace(partial_report, report)

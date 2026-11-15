@@ -331,3 +331,31 @@ tokens in issues, screenshots, chat messages, or saved scripts. Use its
 `gates` and `diagnostics` to identify problems before beginning a
 national catalogue comparison. Take an app backup first and keep v0.6.11
 available as the rollback release.
+
+
+## Append-only combined catalogue index (development preview)
+
+The module `discovery2_append_catalog.py` now implements an independent SQLite
+index at `/data/discovery2/append_catalog.sqlite`. It imports **all legacy**
+catalogue segments into the `legacy` ID namespace and **all new OSM** catalogue
+segments into the `osm` namespace. An ID appearing in both sources is not
+merged, and old road segments are never removed. SQLite triggers reject update
+and delete statements; an interrupted or conflicting import rolls back its
+transaction and cannot silently replace either catalogue.
+
+Normal `build(data_dir, legacy_file, new_file)` requires exact pinned source
+hashes and writes a **new no-clobber** index using an atomic hard link. This
+operation is not wired to live server startup and does not read or write the
+active discovery database. The authenticated
+`GET /v1/discovery2/append/status` endpoint reports separate counts and
+import versions once an index is built. No endpoint initiates build yet.
+
+**Critical:** both namespaces may describe the same physical road. This first
+stage deliberately does not claim accurate physical deduplication or transfer
+a discovery flag from legacy to OSM; candidates still require geometry review.
+Do not sum counts across namespaces to calculate unique physical coverage or
+color OSM segments green. Historical discovery timestamps and IDs continue
+to live in the original `discovery_segments` table.
+
+This stage does **not** constitute a releasable `v0.6.12-beta1` and does not
+modify the installed HAOS `v0.6.11` application.

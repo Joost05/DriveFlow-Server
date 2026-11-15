@@ -40,6 +40,7 @@ from discovery2_upload import receive_catalogue as stage_discovery2_catalogue, s
 from discovery2_analysis import start as start_discovery2_analysis, status as discovery2_analysis_status, read_report as discovery2_read_report
 from discovery2_shadow import candidate_import as create_discovery2_preview, refresh as refresh_discovery2_preview, preview_status as discovery2_preview_status, schedule_refresh as queue_discovery2_preview_refresh, PREVIEW_DB_LOCK as DISCOVERY2_PREVIEW_LOCK, NotReady as Discovery2NotReady
 from discovery2_clients import record as record_discovery2_client, status as discovery2_clients_status
+from discovery2_readiness import evaluate as discovery2_evaluate_readiness
 
 VERSION = "0.6.11"
 PORT = int(os.environ.get("DRIVEFLOW_PORT", "8098"))
@@ -336,6 +337,14 @@ class Api(BaseHTTPRequestHandler):
             return
         if path == "/v1/discovery2/catalog/status":
             self.json(200, {"ok": True, **discovery2_staged_status(DATA_DIR)})
+            return
+        if path == "/v1/discovery2/readiness":
+            try:
+                self.json(200, discovery2_evaluate_readiness(DATA_DIR, DB_PATH))
+            except (sqlite3.Error, OSError, ValueError):
+                self.json(503, {"error": "DISCOVERY2_READINESS_UNAVAILABLE",
+                                "ready_for_switch": False,
+                                "ready_for_google_play": False})
             return
         if path == "/v1/discovery2/clients/status":
             try:

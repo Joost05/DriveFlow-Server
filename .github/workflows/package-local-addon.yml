@@ -34,14 +34,14 @@ jobs:
           manifest = (root / "config.yaml").read_text()
           docker = (root / "Dockerfile").read_text()
           server = (root / "server.py").read_text()
-          assert 'version: "0.6.12-beta1"' in manifest
+          assert 'version: "0.6.13-beta1"' in manifest
           assert "slug: driveflow_server" in manifest
           assert "8098/tcp: 8098" in manifest
           assert "api_token: password(32,)" in manifest
-          assert 'io.hass.version="0.6.12-beta1"' in docker
-          assert 'VERSION = "0.6.12-beta1"' in server
+          assert 'io.hass.version="0.6.13-beta1"' in docker
+          assert 'VERSION = "0.6.13-beta1"' in server
           required = ("server.py", "config.yaml", "Dockerfile", "discovery2_lines.py",
-                      "discovery2_append_catalog.py", "discovery2_preflight.py",
+                      "discovery2_append_catalog.py", "discovery2_osm_discoveries.py", "discovery2_preflight.py",
                       "road_discovery_store.py", "discovery2_upload.py",
                       "compare_discovery2_catalogs.py")
           for file in required:
@@ -58,7 +58,7 @@ jobs:
           from pathlib import Path
           import zipfile
           root = Path("driveflow_server")
-          dest = Path("DriveFlow_Server_v0.6.12-beta1_local.zip")
+          dest = Path("DriveFlow_Server_v0.6.13-beta1_local.zip")
           with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as z:
               for path in sorted(root.rglob("*")):
                   if not path.is_file() or "__pycache__" in path.parts:
@@ -80,4 +80,4 @@ jobs:
               assert z.testzip() is None
           print(f"{dest}: {dest.stat().st_size} bytes")
           PY
-          sha256sum DriveFlow_Server_v0.6.12-beta1_local.zip
+          sha256sum DriveFlow_Server_v0.6.13-beta1_local.zip

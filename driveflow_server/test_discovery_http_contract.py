@@ -88,6 +88,14 @@ class DiscoveryHttpTest(unittest.TestCase):
         self.assertEqual(status, 503)
         self.assertEqual(body["error"], "ROAD_CATALOG_NOT_READY")
 
+    def test_append_catalog_status_read_only_and_authenticated(self):
+        self.assertEqual(self.send("/v1/discovery2/append/status", authorized=False)[0], 401)
+        status, result = self.send("/v1/discovery2/append/status")
+        self.assertEqual(status, 200)
+        self.assertEqual(result["status"], "not_built")
+        self.assertFalse(result["activated"])
+        self.assertEqual(self.send("/v1/discovery/status")[1]["discovered_segments"], 0)
+
     def test_bad_catalog_rejected_before_any_write(self):
         status, _ = self.send("/v1/discovery/merge", {"catalog": "wrong", "ids": ["A1:1"]})
         self.assertEqual(status, 422)

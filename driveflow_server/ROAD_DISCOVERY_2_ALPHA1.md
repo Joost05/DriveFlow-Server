@@ -268,3 +268,199 @@ review, explicit approval of source-to-target geometry, storage/memory
 measurements on Android, an atomic client/database switch with rollback,
 and functional Android Auto driving tests. Do not publish a partial
 migration as a complete v2 release.
+
+
+## Nationwide candidate risk audit (review branch; no activation)
+
+After comparison completes, the server can inspect its own candidate CSV and
+optionally count the **currently synchronized** legacy discoveries, without
+altering any source. Run locally with Python 3.12, or inside a test add-on
+container with the appropriate read-only copies mounted:
+
+```sh
+python discovery2_audit.py /data/discovery2/comparison_candidates.csv \
+  /data/discovery2/candidate_audit.json --legacy-db /data/driveflow.db
+```
+
+**Important:** `/data/driveflow.db` above is illustrative; find the server's
+actual `DB_PATH` in its configuration before running. Use the real path, or
+omit `--legacy-db` to audit only the comparison CSV. The report path must be
+new, and cannot overwrite a previous report.
+
+This audit streams the mapping CSV into a temporary on-disk SQLite index,
+not into RAM. It reports ambiguous candidates, offsets of 7–10 metres,
+old segments represented by multiple new segments (a review signal, not
+necessarily an error), and unmatched/invalid geometry. It also reports how
+many discovered legacy IDs on the server have geometric candidates, if a
+read-only DB is supplied. Output is `manual_review_required`, **not** an
+automated approval file.
+
+A whole-country comparison and audit with real catalogues must still be
+executed; no percentage or discovery retention can be asserted before that.
+Do not use its report as `discovery2_review.py` approvals, and do not switch
+Road Discovery 2.0 based on these diagnostics alone.
+
+
+## HAOS read-only migration preflight (development only)
+
+The new authenticated `GET /v1/discovery2/preflight` endpoint is **diagnostic
+only**. The route is not available on the installed v0.6.11 release; it is
+only in this unmerged development branch. Do not install it on a live HAOS
+server before isolated integration testing.
+
+The preflight checks the original
+`/share/driveflow/roads_nl.json` against the pinned legacy Git blob
+and exact byte size, opens the existing
+`/data/driveflow_server.db` with SQLite `mode=ro` and `query_only=ON`,
+counts already synchronized legacy discovery records and cursor, checks free
+space (minimum 1 GiB), and verifies staged catalogue size and SHA-256 if one
+has been uploaded. It never creates a missing database, starts a comparison,
+performs an upload, approves candidate matches, or changes any active
+discovery state.
+
+An absent staged v2 catalogue is expected before upload:
+`ready_for_catalogue_upload` can be true even when
+`discovery2_catalogue_staged_verified` is false. Neither value authorizes
+migration or v2 activation; `ready_for_migration` and `ready_for_switch`
+always remain false. Failing or unrecognized legacy catalogue identity
+prevents proceeding. No API tokens or individual segment IDs are returned.
+
+After the **separately tested** server is installed in a safe HAOS
+environment, query it locally with the normal Bearer API token. Do not post
+tokens in issues, screenshots, chat messages, or saved scripts. Use its
+`gates` and `diagnostics` to identify problems before beginning a
+national catalogue comparison. Take an app backup first and keep v0.6.11
+available as the rollback release.
+
+
+## Append-only combined catalogue index (development preview)
+
+The module `discovery2_append_catalog.py` now implements an independent SQLite
+index at `/data/discovery2/append_catalog.sqlite`. It imports **all legacy**
+catalogue segments into the `legacy` ID namespace and **all new OSM** catalogue
+segments into the `osm` namespace. An ID appearing in both sources is not
+merged, and old road segments are never removed. SQLite triggers reject update
+and delete statements; an interrupted or conflicting import rolls back its
+transaction and cannot silently replace either catalogue.
+
+Normal `build(data_dir, legacy_file, new_file)` requires exact pinned source
+hashes and writes a **new no-clobber** index using an atomic hard link. This
+operation is not wired to live server startup and does not read or write the
+active discovery database. The authenticated
+`GET /v1/discovery2/append/status` endpoint reports separate counts and
+import versions once an index is built. No endpoint initiates build yet.
+
+**Critical:** both namespaces may describe the same physical road. This first
+stage deliberately does not claim accurate physical deduplication or transfer
+a discovery flag from legacy to OSM; candidates still require geometry review.
+Do not sum counts across namespaces to calculate unique physical coverage or
+color OSM segments green. Historical discovery timestamps and IDs continue
+to live in the original `discovery_segments` table.
+
+This stage does **not** constitute a releasable `v0.6.12-beta1` and does not
+modify the installed HAOS `v0.6.11` application.
+
+
+## Connected road-line server preview — staged files and map endpoints
+
+This developer-only implementation uses the actual connected line files
+generated from the two uploaded catalogues; it **does not replace** the
+original JSON catalogues or edit the active discovery database.
+
+### Files staged separately over LAN
+
+- `legacy`: `roads_nl_legacy_connected.geojson.gz`,
+  **4,419,325 bytes**, SHA256
+  `35d4ca806e009a69ef542aa71c327c695e568a305f3d60b21c7587f2ae11a5b1`
+- `osm`: `roads_nl_osm_connected.geojson.gz`,
+  **24,980,704 bytes**, SHA256
+  `5001a12e375037003038fba43010d1c8a9ff69e3d22fb791568aeddc33ca26f9`
+
+The following routes are Bearer-authenticated and exist only in this
+unmerged development branch:
+
+- `PUT /v1/discovery2/lines/stage/legacy` and `.../osm`:
+  send raw gzip bytes with exact `Content-Length` and `X-Content-SHA256`.
+  Uploaded files are checksum-pinned and never overwrite existing files.
+- `POST /v1/discovery2/lines/build` (empty body):
+  asynchronously creates a disposable SQLite RTree line index in
+  `/data/discovery2/connected_lines.sqlite`; publishing is atomic.
+  Both exact source SHA256 hashes and all expected line/segment counts
+  are checked. This operation does **not** run on server startup.
+- `GET /v1/discovery2/lines/status`: index/staging progress; no activation.
+- `GET /v1/discovery2/lines/viewport?layer=legacy&bbox=5.9,52.1,6.0,52.2&limit=150`:
+  geographic viewport query (max 0.2° per axis, max 250 joined lines per call).
+  The response returns `lines[].parts[]`, preserving one original segment
+  ID and coordinate pair per part. This allows the Android renderer to draw
+  one connected geometry but change color **within** it.
+
+The `legacy` viewport uses the active `discovery_segments` database opened
+with SQLite read-only mode, and marks individual original segments
+`discovered` or `undiscovered`. For `osm`, the endpoint intentionally
+returns `unverified` rather than auto-transferring discovery state from
+geometrical candidates. OSM blue/green status must only be finalized when
+explicitly reviewed mappings and genuine OSM discoveries are implemented.
+
+This preview is not production-ready: no Play version has been built, no
+genuine 29 MB upload has been performed on the Odroid, and the large
+RTree build has not been benchmarked on HAOS aarch64. Keep the installed
+v0.6.11 service untouched.
+
+
+### Verified full-dataset dry run (2026-11-15)
+
+The two uploaded connected `.geojson.gz` files were scanned in their entirety:
+- legacy: 75,309 lines, 250,620 original unique segment IDs, zero topology cardinality errors
+- OSM: 158,225 lines, 1,393,159 original unique segment IDs, zero topology cardinality errors
+
+An independent SQLite/RTree import using the same table and RTree schemas
+on the developer runtime completed in approximately 8.5 seconds, with a
+169,091,072-byte index. This is **not** an HAOS/Odroid performance result.
+A sample bbox `5.9,52.1,6.0,52.2` returned 173 legacy lines and
+308 OSM lines, showing why 250-line pages alone are insufficient.
+
+The viewport endpoint now supports immutable line-ID cursor pagination:
+`GET /v1/discovery2/lines/viewport?layer=osm&bbox=5.9,52.1,6.0,52.2&limit=150&after=0`.
+If `truncated: true`, repeat with `after=next_after` until
+`truncated: false`. Keep layer and bbox fixed across pages and restart
+from `after=0` after moving/zooming the viewport. The query remains
+preview-only and does not alter the user's discovery state.
+
+
+## In-place Home Assistant upgrade plan: v0.6.11 -> v0.6.12-beta1
+
+The development branch now declares `0.6.12-beta1` consistently in
+`config.yaml`, `Dockerfile`, and the runtime `VERSION`. The add-on identity
+`slug: driveflow_server`, TCP port `8098`, `/data` storage, `share:ro`,
+`backup: cold`, and configuration options `api_token` and
+`geoapify_api_key` are **unchanged**. The server continues reading the
+existing `/data/options.json`; no new token, API credential, or new add-on
+installation is needed.
+
+An explicit upgrade regression test exercises repeat `init_db()` against
+an existing SQLite database, verifying the existing legacy discovery ID
+and timestamp, unrelated user data, unchanged old catalogue file,
+unchanged options/API token and absence of an automatic new line index.
+The old `/v1/discovery/*` endpoints remain enabled and the optional v2
+line importer has no startup auto-activation.
+
+Before making this beta visible to a live HAOS installation:
+1. Verify that the existing HA backup is a **cold add-on backup** and includes
+   add-on `/data`, `options.json`, and the actual legacy SQLite database.
+   Separately retain `/share/driveflow/roads_nl.json`, because the
+   `share:ro` mount is outside the add-on's private backup scope.
+2. Confirm the add-on updates **in place** with the existing slug. Keep
+   old routes, existing client token and Cloudflare endpoint.
+3. Install v0.6.12-beta1 without activating the preview; verify
+   `/v1/health`, `/v1/discovery/status`, existing sync and backups.
+4. Upload the already checksum-pinned connected line gzip files over the
+   trusted LAN, and explicitly build only the independent index.
+5. Validate original legacy discovered counts and timestamps before/after,
+   preview viewport pagination, RAM/disk performance and Android rendering.
+6. On any failure, restore the **full compatible add-on backup** and verify
+   the independent `/share` catalogue. Do not assume image rollback alone
+   rolls back the database.
+
+**Current state:** draft PR only; no merge to main, no installed update,
+and no actual HAOS backup has been inspected. The v0.6.12-beta1 label on
+this branch is a release candidate designation, not proof of live safety.

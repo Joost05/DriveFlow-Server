@@ -2,7 +2,7 @@ name: DriveFlow Discovery server verification
 
 on:
   push:
-    branches: [main, feature/discovery-place-parity, feature/discovery2-national-catalog-alpha1]
+    branches: [main, feature/discovery-place-parity, feature/discovery2-national-catalog-alpha1, feature/discovery2-reviewed-migration-preview]
     paths:
       - "driveflow_server/**"
       - ".github/workflows/discovery-server-tests.yml"
@@ -27,9 +27,22 @@ jobs:
         run: python -m compileall -q driveflow_server
       - name: Test both discovery catalogues and province recovery
         working-directory: driveflow_server
-        run: python -m unittest -v test_road_discovery_store test_discovery_places test_discovery_sync_recovery test_discovery_http_contract test_discovery_statistics test_province_statistics test_province_progress test_discovery2_catalog_builder test_compare_discovery2_catalogs test_discovery2_upload test_discovery2_analysis test_discovery2_shadow test_discovery2_clients test_discovery2_readiness
+        run: python -m unittest -v test_road_discovery_store test_discovery_places test_discovery_sync_recovery test_discovery_http_contract test_discovery_statistics test_province_statistics test_province_progress test_discovery2_catalog_builder test_compare_discovery2_catalogs test_discovery2_upload test_discovery2_analysis test_discovery2_shadow test_discovery2_clients test_discovery2_readiness test_discovery2_review test_discovery2_audit test_discovery2_preflight test_discovery2_append_catalog test_discovery2_lines test_discovery2_osm_discoveries test_in_place_upgrade
       - name: Build Home Assistant app image
         run: docker build -t driveflow-discovery-test ./driveflow_server
       - name: Verify all runtime modules are included
         run: |
-          docker run --rm --entrypoint python driveflow-discovery-test -c "import server, discovery_places, road_discovery_store, province_statistics, discovery2_readiness, discovery2_shadow, discovery2_clients"
+          docker run --rm --entrypoint python driveflow-discovery-test -c "import server, discovery_places, road_discovery_store, province_statistics, discovery2_readiness, discovery2_shadow, discovery2_clients, discovery2_review, discovery2_audit, discovery2_preflight, discovery2_append_catalog, discovery2_lines, discovery2_osm_discoveries"
+      - name: Smoke test isolated running container and read-only preflight
+        env:
+          SMOKE_TOKEN: "test-only-driveflow-token-at-least-32-chars"
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/driveflow-smoke-data"
+          docker run -d --name driveflow-discovery-smoke \
+            -e DRIVEFLOW_TOKEN="$SMOKE_TOKEN" \
+            -v "$RUNNER_TEMP/driveflow-smoke-data:/data" \
+            -p 127.0.0.1:18098:8098 driveflow-discovery-test
+          trap 'docker logs driveflow-discovery-smoke; docker rm -f driveflow-discovery-smoke' EXIT
+          SMOKE_DATA_DIR="$RUNNER_TEMP/driveflow-smoke-data" \
+            python driveflow_server/smoke_discovery2_container.py

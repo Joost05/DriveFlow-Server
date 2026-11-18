@@ -41,8 +41,17 @@ from discovery2_analysis import start as start_discovery2_analysis, status as di
 from discovery2_shadow import candidate_import as create_discovery2_preview, refresh as refresh_discovery2_preview, preview_status as discovery2_preview_status, schedule_refresh as queue_discovery2_preview_refresh, PREVIEW_DB_LOCK as DISCOVERY2_PREVIEW_LOCK, NotReady as Discovery2NotReady
 from discovery2_clients import record as record_discovery2_client, status as discovery2_clients_status
 from discovery2_readiness import evaluate as discovery2_evaluate_readiness
+from discovery2_preflight import evaluate as discovery2_evaluate_preflight
+from discovery2_append_catalog import status as discovery2_append_catalog_status
+from discovery2_lines import (status as discovery2_lines_status, stage as discovery2_lines_stage,
+                              start_build as discovery2_lines_build, tiles as discovery2_lines_tiles,
+                              LAYERS as DISCOVERY2_LINE_LAYERS)
+from discovery2_osm_discoveries import (
+    merge as discovery2_osm_merge, changes as discovery2_osm_changes,
+    status as discovery2_osm_status
+)
 
-VERSION = "0.6.11"
+VERSION = "0.6.13-beta1"
 PORT = int(os.environ.get("DRIVEFLOW_PORT", "8098"))
 DATA_DIR = Path(os.environ.get("DRIVEFLOW_DATA_DIR", "/data"))
 FILES_DIR = DATA_DIR / "backups"
@@ -335,6 +344,57 @@ class Api(BaseHTTPRequestHandler):
             except OSError:
                 log.warning("Discovery2 catalogue download failed due to IO error")
             return
+        if path == "/v1/discovery2/preflight":
+            try:
+                self.json(200, discovery2_evaluate_preflight(
+                    DATA_DIR, ROAD_CATALOG_FILE, DB_PATH))
+            except (OSError, sqlite3.Error, ValueError):
+                self.json(503, {"error": "DISCOVERY2_PREFLIGHT_UNAVAILABLE",
+                                "ready_for_migration": False,
+                                "ready_for_switch": False})
+            return
+        if path == "/v1/discovery2/lines/status":
+            self.json(200, {"ok": True, **discovery2_lines_status(DATA_DIR)})
+            return
+        if path == "/v1/discovery2/osm/status":
+            try:
+                self.json(200, discovery2_osm_status(DATA_DIR))
+            except (OSError, sqlite3.Error):
+                self.json(503, {"error": "OSM_DISCOVERY_STATUS_UNAVAILABLE"})
+            return
+        if path == "/v1/discovery2/osm/changes":
+            try:
+                args = parse_qs(urlparse(self.path).query)
+                result = discovery2_osm_changes(DATA_DIR,
+                    int(args.get("since",["0"])[0]),
+                    int(args.get("limit",["1000"])[0]))
+                self.json(200,result)
+            except (ValueError, TypeError):
+                self.json(422,{"error":"INVALID_OSM_CURSOR"})
+            except (OSError, sqlite3.Error):
+                self.json(503,{"error":"OSM_DISCOVERY_UNAVAILABLE"})
+            return
+        if path == "/v1/discovery2/lines/viewport":
+            try:
+                args = parse_qs(urlparse(self.path).query)
+                layer = args.get("layer", ["legacy"])[0]
+                bbox = tuple(float(v) for v in args["bbox"][0].split(","))
+                limit = int(args.get("limit", ["150"])[0])
+                after = int(args.get("after", ["0"])[0])
+                self.json(200, {"ok": True, **discovery2_lines_tiles(
+                    DATA_DIR, DB_PATH, layer, bbox, limit, after)})
+            except (KeyError, ValueError, TypeError):
+                self.json(422, {"error": "INVALID_VIEWPORT_REQUEST"})
+            except (OSError, sqlite3.Error, FileNotFoundError):
+                self.json(503, {"error": "DISCOVERY2_LINES_NOT_READY"})
+            return
+        if path == "/v1/discovery2/append/status":
+            try:
+                self.json(200, {"ok": True, **discovery2_append_catalog_status(DATA_DIR)})
+            except (OSError, sqlite3.Error, ValueError):
+                self.json(503, {"error": "DISCOVERY2_APPEND_STATUS_UNAVAILABLE",
+                                "activated": False, "ready_for_switch": False})
+            return
         if path == "/v1/discovery2/catalog/status":
             self.json(200, {"ok": True, **discovery2_staged_status(DATA_DIR)})
             return
@@ -567,6 +627,28 @@ class Api(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         path = urlparse(self.path).path
+        if path.startswith("/v1/discovery2/lines/stage/"):
+            layer = path.rsplit("/", 1)[-1]
+            if layer not in DISCOVERY2_LINE_LAYERS:
+                self.close_connection = True
+                self.json(404, {"error": "UNKNOWN_LINE_LAYER"})
+                return
+            if not self.authenticated():
+                self.close_connection = True
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "-1"))
+                result = discovery2_lines_stage(
+                    self.rfile, length, self.headers.get("X-Content-SHA256", ""),
+                    DATA_DIR, layer)
+                self.json(201, {"ok": True, **result})
+            except FileExistsError:
+                self.close_connection = True
+                self.json(409, {"error": "LINE_LAYER_ALREADY_STAGED"})
+            except (OSError, ValueError):
+                self.close_connection = True
+                self.json(422, {"error": "INVALID_LINE_LAYER_UPLOAD"})
+            return
         if path != "/v1/discovery2/catalog/stage":
             self.close_connection = True
             self.json(404, {"error": "route niet gevonden"})
@@ -658,6 +740,42 @@ class Api(BaseHTTPRequestHandler):
             except (OSError, sqlite3.Error) as exc:
                 log.warning("Discovery2 preview operation failed: %s", type(exc).__name__)
                 self.json(503, {"error": "PREVIEW_OPERATION_FAILED"})
+            return
+        if path == "/v1/discovery2/osm/merge":
+            if not self.authenticated():
+                return
+            if self.headers.get("Content-Type","").split(";")[0].strip() != "application/json":
+                self.json(415,{"error":"ONLY_JSON_ALLOWED"})
+                return
+            try:
+                length = int(self.headers.get("Content-Length","0"))
+                if not 1 <= length <= 262144:
+                    self.json(413,{"error":"INVALID_OSM_BATCH_SIZE"})
+                    return
+                payload = json.loads(self.rfile.read(length))
+                device = self.headers.get("X-DriveFlow-Device-Id","")
+                if not DEVICE_RE.fullmatch(device):
+                    self.json(400,{"error":"INVALID_DEVICE"})
+                    return
+                with LOCK:
+                    result = discovery2_osm_merge(DATA_DIR,payload,device,now_iso())
+                self.json(200,result)
+            except (ValueError,TypeError,json.JSONDecodeError) as exc:
+                self.json(422,{"error":str(exc)[:140]})
+            except (OSError,sqlite3.Error):
+                self.json(503,{"error":"OSM_DISCOVERY_MERGE_UNAVAILABLE"})
+            return
+        if path == "/v1/discovery2/lines/build":
+            if not self.authenticated():
+                self.close_connection = True
+                return
+            if self.headers.get("Content-Length", "0") != "0":
+                self.close_connection = True
+                self.json(413, {"error": "NO_BODY_ALLOWED"})
+                return
+            started = discovery2_lines_build(DATA_DIR)
+            self.json(202 if started else 409,
+                      {"ok": started, **discovery2_lines_status(DATA_DIR)})
             return
         if path == "/v1/discovery2/compare/start":
             if not self.authenticated():

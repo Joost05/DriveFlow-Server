@@ -1,0 +1,83 @@
+name: Package DriveFlow local Home Assistant addon beta
+
+on:
+  push:
+    branches:
+      - feature/discovery2-reviewed-migration-preview
+    paths:
+      - ".github/workflows/package-local-addon.yml"
+      - "driveflow_server/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: driveflow-local-addon-beta-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify release identity and module packaging
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          root = Path("driveflow_server")
+          manifest = (root / "config.yaml").read_text()
+          docker = (root / "Dockerfile").read_text()
+          server = (root / "server.py").read_text()
+          assert 'version: "0.6.12-beta1"' in manifest
+          assert "slug: driveflow_server" in manifest
+          assert "8098/tcp: 8098" in manifest
+          assert "api_token: password(32,)" in manifest
+          assert 'io.hass.version="0.6.12-beta1"' in docker
+          assert 'VERSION = "0.6.12-beta1"' in server
+          required = ("server.py", "config.yaml", "Dockerfile", "discovery2_lines.py",
+                      "discovery2_append_catalog.py", "discovery2_preflight.py",
+                      "road_discovery_store.py", "discovery2_upload.py",
+                      "compare_discovery2_catalogs.py")
+          for file in required:
+              assert (root / file).is_file(), file
+          print("Identity and all required runtime files verified")
+          PY
+          python -m compileall -q driveflow_server
+
+      - name: Build ZIP with only addon files
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import zipfile
+          root = Path("driveflow_server")
+          dest = Path("DriveFlow_Server_v0.6.12-beta1_local.zip")
+          with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+              for path in sorted(root.rglob("*")):
+                  if not path.is_file() or "__pycache__" in path.parts:
+                      continue
+                  if path.name.startswith("test_") or path.name.startswith("smoke_"):
+                      continue
+                  if path.suffix in {".pyc", ".pyo"}:
+                      continue
+                  if path.name in {"README.md", "ROAD_DISCOVERY_2_ALPHA1.md"}:
+                      continue
+                  z.write(path, path.as_posix())
+          with zipfile.ZipFile(dest) as z:
+              names = set(z.namelist())
+              assert "driveflow_server/config.yaml" in names
+              assert "driveflow_server/Dockerfile" in names
+              assert "driveflow_server/server.py" in names
+              assert "driveflow_server/discovery2_lines.py" in names
+              assert "driveflow_server/discovery2_append_catalog.py" in names
+              assert z.testzip() is None
+          print(f"{dest}: {dest.stat().st_size} bytes")
+          PY
+          sha256sum DriveFlow_Server_v0.6.12-beta1_local.zip

@@ -252,6 +252,15 @@ def _refresh_worker(data_dir: Path, server_db_path: Path):
                 result = refresh(data_dir, server_db_path)
             if not result["caught_up_with_server"]:
                 continue
+            # Both previews are expendable. The active legacy merge must never
+            # fail due to a reviewed preview error; keep replay retryable.
+            reviewed = data_dir / "discovery2" / "reviewed_preview.sqlite"
+            if reviewed.is_file() and not reviewed.is_symlink():
+                from discovery2_review import refresh_reviewed_preview
+                while True:
+                    approved = refresh_reviewed_preview(data_dir, server_db_path)
+                    if approved["caught_up_with_server"]:
+                        break
             with _SCHEDULE_LOCK:
                 if _REFRESH_PENDING:
                     continue

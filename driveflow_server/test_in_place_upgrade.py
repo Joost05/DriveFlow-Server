@@ -1,4 +1,4 @@
-"""In-place v0.6.11 -> v0.6.12-beta1 HAOS upgrade contract.
+"""In-place v0.6.11 -> v0.6.13-beta1 HAOS upgrade contract.
 
 Uses a persistent /data-style directory and runs the real server init twice,
 including a new process-like import. Neither legacy roads nor discoveries may
@@ -20,15 +20,15 @@ class InPlaceUpgradeTests(unittest.TestCase):
     def test_manifest_keeps_existing_slug_port_backup_and_options(self):
         config = (Path(__file__).resolve().parent / "config.yaml").read_text()
         docker = (Path(__file__).resolve().parent / "Dockerfile").read_text()
-        self.assertIn('version: "0.6.12-beta1"', config)
+        self.assertIn('version: "0.6.13-beta1"', config)
         self.assertIn("slug: driveflow_server", config)
         self.assertIn("  8098/tcp: 8098", config)
         self.assertIn("backup: cold", config)
         self.assertIn("  - share:ro", config)
         self.assertIn("  api_token: password(32,)", config)
         self.assertIn("  geoapify_api_key: password?", config)
-        self.assertIn('io.hass.version="0.6.12-beta1"', docker)
-        self.assertEqual(server.VERSION, "0.6.12-beta1")
+        self.assertIn('io.hass.version="0.6.13-beta1"', docker)
+        self.assertEqual(server.VERSION, "0.6.13-beta1")
         self.assertEqual(server.PORT, 8098)
 
     def test_existing_data_and_token_survive_repeated_init(self):

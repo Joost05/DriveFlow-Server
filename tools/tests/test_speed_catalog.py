@@ -29,6 +29,7 @@ class SpeedCatalogTest(unittest.TestCase):
         result = lookup(self.db, 52.0, 5.905)
         self.assertEqual(result["limit_kmh"], 50)
         self.assertEqual(result["dataset_version"], "test-1")
+        self.assertTrue(result["cacheable"])
 
     def test_daytime_and_nighttime_speeds(self):
         from datetime import datetime
@@ -40,8 +41,12 @@ class SpeedCatalogTest(unittest.TestCase):
         amsterdam = ZoneInfo("Europe/Amsterdam")
         daytime = datetime(2026, 11, 21, 12, 0, tzinfo=amsterdam)
         nighttime = datetime(2026, 11, 21, 23, 0, tzinfo=amsterdam)
-        self.assertEqual(lookup(self.db, 52.0, 5.905, at=daytime)["limit_kmh"], 100)
-        self.assertEqual(lookup(self.db, 52.0, 5.905, at=nighttime)["limit_kmh"], 130)
+        day = lookup(self.db, 52.0, 5.905, at=daytime)
+        night = lookup(self.db, 52.0, 5.905, at=nighttime)
+        self.assertEqual(day["limit_kmh"], 100)
+        self.assertEqual(night["limit_kmh"], 130)
+        self.assertFalse(day["cacheable"])
+        self.assertFalse(night["cacheable"])
 
     def test_reject_incomplete_time_window(self):
         road = self.segment("bad-schedule", 100, [[5.9, 52.0], [5.91, 52.0]])

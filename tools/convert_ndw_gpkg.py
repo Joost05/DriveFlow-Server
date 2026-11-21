@@ -25,10 +25,11 @@ def first(properties: dict, *keys):
 
 def speed_value(raw):
     try:
-        value = int(str(raw).strip())
-    except (ValueError, TypeError):
+        amount = float(str(raw).strip())
+        value = int(amount)
+    except (ValueError, TypeError, OverflowError):
         return None
-    return value if value in (5,15,20,30,40,50,60,70,80,90,100,120,130) else None
+    return value if amount == value and value in (5,12,15,20,30,40,50,60,70,80,90,100,120,130) else None
 
 def clock_value(raw):
     if raw is None:
@@ -76,6 +77,19 @@ def convert_feature(feature: dict, ordinal: int) -> list[dict]:
             return []
     else:
         begin = end = alternate = None
+    # The source may attach a speed to only a subsection (VAN/NAAR) of
+    # an NWB wegvak. Unless the delivered line is already clipped, applying
+    # it to the entire feature would be unsafe; skip uncertain partials.
+    from_m = first(properties, "VAN")
+    to_m = first(properties, "NAAR")
+    total_m = first(properties, "LENGTE")
+    try:
+        if from_m is not None and float(from_m) > 1.0:
+            return []
+        if to_m is not None and total_m is not None and float(to_m) < float(total_m) - 1.0:
+            return []
+    except (ValueError, TypeError):
+        return []
     geometry = feature.get("geometry") or {}
     shape = geometry.get("type")
     raw = geometry.get("coordinates") or []

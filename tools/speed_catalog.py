@@ -177,7 +177,7 @@ def lookup(path: Path, lat: float, lon: float, accuracy_m: float = 15,
             distance = min(_distance_to_segment(lat, lon, a, b)
                            for a, b in zip(points, points[1:]))
             if distance <= radius:
-                matches.append((distance, identifier, speed))
+                matches.append((distance, identifier, speed, begin is not None))
         if not matches:
             return {"status": "no_matching_road", "limit_kmh": None, "dataset_version": version}
         matches.sort()
@@ -188,6 +188,12 @@ def lookup(path: Path, lat: float, lon: float, accuracy_m: float = 15,
                for m in matches[1:]):
             return {"status": "ambiguous_parallel_roads", "limit_kmh": None,
                     "dataset_version": version}
+        # Only fixed, unambiguous roads may enter the Android offline cache:
+        # a time-dependent limit can change while the phone is offline.
+        cacheable = not first[3] and not any(
+            m[1] != first[1] and m[0] <= 20.0 for m in matches[1:]
+        )
         return {"status": "matched", "limit_kmh": first[2],
                 "segment_id": first[1], "distance_m": round(first[0], 1),
+                "cacheable": cacheable,
                 "dataset_version": version, "source": "local_catalog"}

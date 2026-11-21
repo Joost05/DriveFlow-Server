@@ -1,0 +1,100 @@
+name: Public Netherlands speed catalog
+on:
+  push:
+    branches: [feature/speed-catalog-data-pipeline]
+    paths:
+      - 'tools/**'
+      - '.github/workflows/ndw-speed-catalog.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '15 5 9 * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ndw-speed-catalog
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check scripts
+        run: python -m compileall -q tools
+      - name: Unit tests (catalog and NDW conversion)
+        run: python -m unittest discover -s tools/tests -p 'test_*.py' -v
+  catalog:
+    needs: validate
+    # Feature-branch validation may build a catalog, but must never publish it.
+    if: github.ref == 'refs/heads/feature/speed-catalog-data-pipeline' || (github.ref == 'refs/heads/main' && github.event_name != 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install GDAL
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends gdal-bin
+      - name: Build and verify latest national speed catalog
+        id: build
+        run: python tools/build_speed_release.py --out dist --github-output "$GITHUB_OUTPUT"
+      - name: Print validation summary
+        if: success()
+        run: cat dist/speed_catalog.json
+      - name: Record full catalog validation result
+        if: always() && github.ref == 'refs/heads/feature/speed-catalog-data-pipeline'
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          CATALOG_RESULT: ${{ steps.build.outcome }}
+        with:
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const path = '.github/status/catalog-full-test.json';
+            const manifestPath = 'dist/speed_catalog.json';
+            const metrics = fs.existsSync(manifestPath)
+              ? JSON.parse(fs.readFileSync(manifestPath, 'utf8')) : null;
+            const payload = {
+              run_id: context.runId, source_sha: context.sha,
+              result: process.env.CATALOG_RESULT,
+              version: metrics?.dataset_version ?? null,
+              segments: metrics?.segments ?? null,
+              skipped_features: metrics?.skipped_features ?? null,
+              run_url: `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`
+            };
+            let sha;
+            try {
+              const previous = await github.rest.repos.getContent({
+                owner, repo, path, ref: context.ref
+              });
+              sha = previous.data.sha;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+            await github.rest.repos.createOrUpdateFileContents({
+              owner, repo, path, sha,
+              branch: context.ref.replace('refs/heads/', ''),
+              message: 'chore(ci): record full NDW catalog validation',
+              content: Buffer.from(JSON.stringify(payload,null,2)+'\n').toString('base64')
+            });
+      - name: Release immutable dataset build
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Catalog release already exists: $TAG"
+            exit 0
+          fi
+          gh release create "$TAG" dist/speed_nl.sqlite.gz dist/speed_catalog.json \
+            --title "NDW speed catalog $TAG" --latest=false \
+            --notes "Generated from NDW/WKD public maximum speeds. Conservative road matching; traffic signs remain authoritative."

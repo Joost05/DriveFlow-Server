@@ -64,7 +64,7 @@ def convert_feature(feature: dict, ordinal: int) -> list[dict]:
     begin_raw = first(properties, "BEGINTIJD")
     end_raw = first(properties, "EINDTIJD")
     alt_raw = first(properties, "MAXSHD_ALT")
-    if any(x is not None for x in (begin_raw, end_raw, alt_raw)):
+    if begin_raw is not None or end_raw is not None:
         if any(x is None for x in (begin_raw, end_raw, alt_raw)):
             return []
         try:
@@ -113,7 +113,7 @@ def convert(source: Path, destination: Path, layer: str | None = None):
         command.append(layer)
     counters = {"features": 0, "segments": 0, "skipped": 0}
     # Consume GDAL stdout as a stream to avoid storing hundreds of MB in RAM.
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
         with destination.open("w", encoding="utf8") as sink:
@@ -128,9 +128,9 @@ def convert(source: Path, destination: Path, layer: str | None = None):
                 for element in elements:
                     sink.write(json.dumps(element, separators=(",", ":")) + "\n")
                     counters["segments"] += 1
-        _, errors = process.communicate()
+        process.wait()
         if process.returncode != 0:
-            raise RuntimeError(f"ogr2ogr exit {process.returncode}: {errors[-1000:]}")
+            raise RuntimeError(f"ogr2ogr failed with exit code {process.returncode}")
         if counters["segments"] == 0:
             raise RuntimeError("No valid road segments generated; verify source/layer/attributes")
         return counters

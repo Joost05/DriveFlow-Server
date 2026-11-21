@@ -30,7 +30,8 @@ jobs:
         run: python -m unittest discover -s tools/tests -p 'test_*.py' -v
   catalog:
     needs: validate
-    if: github.ref == 'refs/heads/main' && github.event_name != 'push'
+    # Feature-branch validation may build a catalog, but must never publish it.
+    if: github.ref == 'refs/heads/feature/speed-catalog-data-pipeline' || (github.ref == 'refs/heads/main' && github.event_name != 'push')
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -43,7 +44,11 @@ jobs:
       - name: Build and verify latest national speed catalog
         id: build
         run: python tools/build_speed_release.py --out dist --github-output "$GITHUB_OUTPUT"
+      - name: Print validation summary
+        if: success()
+        run: cat dist/speed_catalog.json
       - name: Release immutable dataset build
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.build.outputs.tag }}

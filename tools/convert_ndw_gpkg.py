@@ -118,13 +118,36 @@ def convert_feature(feature: dict, ordinal: int) -> list[dict]:
             output.append(item)
     return output
 
+def detect_speed_layer(source: Path) -> str:
+    """Discover actual speed layer by its MAXSHD attribute, fail on ambiguity."""
+    summary = subprocess.run(["ogrinfo", "-ro", "-so", str(source)],
+                             capture_output=True, text=True, check=True, timeout=120)
+    import re
+    layers = []
+    for line in summary.stdout.splitlines():
+        match = re.match(r"^\s*\d+:\s*(.+?)(?:\s+\(.*\))?\s*$", line)
+        if match:
+            layers.append(match.group(1).strip())
+    if not layers:
+        raise ValueError("GeoPackage contains no vector layers")
+    matching = []
+    for candidate in layers:
+        details = subprocess.run(["ogrinfo", "-ro", "-so", str(source), candidate],
+                                 capture_output=True, text=True, check=True, timeout=120)
+        if re.search(r"(?im)^\s*MAXSHD\s*:", details.stdout):
+            matching.append(candidate)
+    if len(matching) != 1:
+        raise ValueError(f"Expected one speed layer with MAXSHD, found {matching} in {layers}")
+    print(f"Selected NDW speed layer: {matching[0]}", file=sys.stderr)
+    return matching[0]
+
+
 def convert(source: Path, destination: Path, layer: str | None = None):
     if not source.is_file():
         raise FileNotFoundError(source)
+    selected_layer = layer or detect_speed_layer(source)
     command = ["ogr2ogr", "-f", "GeoJSONSeq", "/vsistdout/", str(source),
-               "-t_srs", "EPSG:4326"]
-    if layer:
-        command.append(layer)
+               selected_layer, "-t_srs", "EPSG:4326"]
     counters = {"features": 0, "segments": 0, "skipped": 0}
     # Consume GDAL stdout as a stream to avoid storing hundreds of MB in RAM.
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)

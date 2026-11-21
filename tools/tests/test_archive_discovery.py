@@ -24,8 +24,8 @@ class OfficialArchiveDiscoveryTest(unittest.TestCase):
         self.assertEqual(url,
                          build_speed_release.INDEX + "01-11-2026.zip")
 
-    def test_only_rijkswaterstaat_https_assets(self):
-        with self.assertRaises(ValueError):
+    def test_missing_archives_are_rejected(self):
+        with self.assertRaises(FileNotFoundError):
             build_speed_release.extract_gpkg(Path("nonexistent.zip"),
                                              Path("output.gpkg"))
 

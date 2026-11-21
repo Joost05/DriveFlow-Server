@@ -47,6 +47,43 @@ jobs:
       - name: Print validation summary
         if: success()
         run: cat dist/speed_catalog.json
+      - name: Record full catalog validation result
+        if: always() && github.ref == 'refs/heads/feature/speed-catalog-data-pipeline'
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          CATALOG_RESULT: ${{ steps.build.outcome }}
+        with:
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const path = '.github/status/catalog-full-test.json';
+            const manifestPath = 'dist/speed_catalog.json';
+            const metrics = fs.existsSync(manifestPath)
+              ? JSON.parse(fs.readFileSync(manifestPath, 'utf8')) : null;
+            const payload = {
+              run_id: context.runId, source_sha: context.sha,
+              result: process.env.CATALOG_RESULT,
+              version: metrics?.dataset_version ?? null,
+              segments: metrics?.segments ?? null,
+              skipped_features: metrics?.skipped_features ?? null,
+              run_url: `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`
+            };
+            let sha;
+            try {
+              const previous = await github.rest.repos.getContent({
+                owner, repo, path, ref: context.ref
+              });
+              sha = previous.data.sha;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+            await github.rest.repos.createOrUpdateFileContents({
+              owner, repo, path, sha,
+              branch: context.ref.replace('refs/heads/', ''),
+              message: 'chore(ci): record full NDW catalog validation',
+              content: Buffer.from(JSON.stringify(payload,null,2)+'\n').toString('base64')
+            });
       - name: Release immutable dataset build
         if: github.ref == 'refs/heads/main'
         env:

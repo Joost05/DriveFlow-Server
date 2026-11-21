@@ -136,10 +136,17 @@ def detect_speed_layer(source: Path) -> str:
                                  capture_output=True, text=True, check=True, timeout=120)
         if re.search(r"(?im)^\s*MAXSHD\s*:", details.stdout):
             matching.append(candidate)
-    if len(matching) != 1:
-        raise ValueError(f"Expected one speed layer with MAXSHD, found {matching} in {layers}")
-    print(f"Selected NDW speed layer: {matching[0]}", file=sys.stderr)
-    return matching[0]
+    if not matching:
+        raise ValueError(f"No speed layer with MAXSHD found in {layers}")
+    # The public WKD may ship both wegvakken and wegvakdelen layers.
+    # Wegvakdelen contains the most precisely segmented road geometries.
+    preferred = [name for name in matching if "wegvakdelen" in name.casefold()
+                 or "wegvakdeel" in name.casefold()]
+    candidates = preferred or matching
+    if len(candidates) != 1:
+        raise ValueError(f"Ambiguous speed layers: {matching}; explicit --layer required")
+    print(f"Selected NDW speed layer: {candidates[0]} (from {matching})", file=sys.stderr)
+    return candidates[0]
 
 
 def convert(source: Path, destination: Path, layer: str | None = None):

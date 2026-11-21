@@ -1,0 +1,56 @@
+name: Public Netherlands speed catalog
+on:
+  push:
+    branches: [feature/speed-catalog-data-pipeline]
+    paths:
+      - 'tools/**'
+      - '.github/workflows/ndw-speed-catalog.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '15 5 9 * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ndw-speed-catalog
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check scripts
+        run: python -m compileall -q tools
+  catalog:
+    needs: validate
+    if: github.ref == 'refs/heads/main' && github.event_name != 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install GDAL
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends gdal-bin
+      - name: Build and verify latest national speed catalog
+        id: build
+        run: python tools/build_speed_release.py --out dist --github-output "$GITHUB_OUTPUT"
+      - name: Release immutable dataset build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Catalog release already exists: $TAG"
+            exit 0
+          fi
+          gh release create "$TAG" dist/speed_nl.sqlite.gz dist/speed_catalog.json \
+            --title "NDW speed catalog $TAG" --latest=false \
+            --notes "Generated from NDW/WKD public maximum speeds. Conservative road matching; traffic signs remain authoritative."

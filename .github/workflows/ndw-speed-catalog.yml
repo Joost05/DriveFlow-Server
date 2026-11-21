@@ -26,6 +26,8 @@ jobs:
           python-version: '3.12'
       - name: Check scripts
         run: python -m compileall -q tools
+      - name: Unit tests (catalog and NDW conversion)
+        run: python -m unittest discover -s tools/tests -p 'test_*.py' -v
   catalog:
     needs: validate
     if: github.ref == 'refs/heads/main' && github.event_name != 'push'

@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-MAX_SEGMENTS = 2_000_000
+MAX_SEGMENTS = 4_000_000
 MAX_LINE = 16384
 MAX_VERTICES = 128
 MAX_DISTANCE_M = 35.0
